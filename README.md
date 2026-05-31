@@ -12,7 +12,7 @@ A minimal x86 hobby operating system built from scratch. Boots from real mode in
 | **VGA text mode** | 80×25, hardware cursor, scrolling, hex output, `\t` tab stops |
 | **PS/2 keyboard** | Ring buffer, shift/caps lock, arrow key support, extended scancode handling |
 | **Interrupts** | IDT with 32 ISRs (exceptions) and 16 IRQs (PIC remapped to INT 32–47), handler registration |
-| **Shell** | Command history (up/down arrows), `help`, `echo`, `clear`/`cls`, `hex`, `ver`, `reboot`, `shutdown`/`poweroff` |
+| **Shell** | Command history (up/down arrows), `help`, `echo`, `clear`, `hex`, `ver`, `sleep`, `reboot`, `shutdown`/`poweroff` |
 
 ## Requirements
 
@@ -177,7 +177,6 @@ Noveris OS Shell
 help     Show this help
 echo     Print text
 clear    Clear screen
-cls      Clear screen
 hex      Print a number in hex
 ver      Show version
 reboot   Reboot system
@@ -194,7 +193,7 @@ shutdown Power off
 |---------|--------|-------------|
 | `help`, `?` | `help` | Print available commands |
 | `echo` | `echo <text>` | Print `<text>` to screen |
-| `clear`, `cls` | `clear` | Clear the screen and reset cursor |
+| `clear` | `clear` | Clear the screen and reset cursor |
 | `hex` | `hex <num>` | Parse a decimal number and print it in hex |
 | `ver` | `ver` | Print OS version string |
 | `reboot` | `reboot` | Send reset signal via the keyboard controller (port 0x64, command 0xFE) |

@@ -11,7 +11,7 @@
 |---------|-------------|
 | `help` / `?` | Show this help |
 | `echo <text>` | Print text |
-| `clear` / `cls` | Clear screen |
+| `clear` | Clear screen |
 | `hex <num>` | Print number in hexadecimal |
 | `ver` | Show OS version |
 | `reboot` | Reboot system |
