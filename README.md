@@ -117,10 +117,10 @@ Press **Ctrl-C** in the Bochs console or close the window to stop the emulator.
 │  BIOS → 0x7C00 (bootloader MBR)                         │
 │    • Sets up segments and stack at 0x9000               │
 │    • Loads kernel (KERNEL_SECTORS sectors) from disk    │
-│      to staging buffer at 0x0600 via INT 0x13 (CHS)    │
+│      to staging buffer at 0x0600 via INT 0x13 (CHS)     │
 │    • Copies PM trampoline to 0x0500 (safe zone)         │
 │    • Enables A20 gate via port 0x92                     │
-│    • Loads GDT (code 0x08, data 0x10)                  │
+│    • Loads GDT (code 0x08, data 0x10)                   │
 │    • Sets CR0 bit 0 (protected mode)                    │
 │    • Far-jumps to PM trampoline at 0x0500               │
 ├─────────────────────────────────────────────────────────┤
@@ -128,13 +128,13 @@ Press **Ctrl-C** in the Bochs console or close the window to stop the emulator.
 │    • Reloads segment registers with DATA_SEG (0x10)     │
 │    • Sets up stack pointer to 0x9000                    │
 │    • Backwards rep movsd: copies kernel from 0x0600     │
-│      to 0x2000 (count = KERNEL_SECTORS * 128 dwords)   │
-│    • Calls KERNEL_OFFSET (0x2000) → kernel_main()      │
+│      to 0x2000 (count = KERNEL_SECTORS * 128 dwords)    │
+│    • Calls KERNEL_OFFSET (0x2000) → kernel_main()       │
 ├─────────────────────────────────────────────────────────┤
 │  kernel_main() (C code)                                 │
 │    • init_gdt()   — reloads GDT with user-mode entries  │
 │    • init_idt()   — sets up IDT, remaps PIC, enables    │
-│                     interrupts (STI)                     │
+│                     interrupts (STI)                    │
 │    • init_screen() — clears screen, resets cursor       │
 │    • init_keyboard() — registers IRQ1 handler           │
 │    • Prints banner, enters shell read-eval loop         │
