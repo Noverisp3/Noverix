@@ -3,6 +3,7 @@
 #include "drivers/serial.h"
 #include "cpu/gdt.h"
 #include "cpu/idt.h"
+#include "cpu/timer.h"
 #include "cpu/ports.h"
 
 #define debug_log(msg) serial_write_string("[kernel] "); serial_write_string(msg); serial_write_char('\n')
@@ -134,6 +135,7 @@ static void handle_cmd(const char *buf)
         print_string("cls      Clear screen\n");
         print_string("hex      Print a number in hex\n");
         print_string("ver      Show version\n");
+        print_string("sleep    Sleep for N milliseconds\n");
         print_string("reboot   Reboot system\n");
         print_string("shutdown Power off\n");
     } else if (strcmp(cmd, "echo") == 0) {
@@ -152,6 +154,22 @@ static void handle_cmd(const char *buf)
         print_string("\n");
     } else if (strcmp(cmd, "ver") == 0) {
         print_string("Noveris OS v0.1\n");
+    } else if (strcmp(cmd, "sleep") == 0) {
+        unsigned int n = 0;
+        int k = 0;
+        while (arg[k]) {
+            n = n * 10 + (arg[k] - '0');
+            k++;
+        }
+        if (n > 0 && n <= 10000) {
+            print_string("Sleeping ");
+            print_hex(n);
+            print_string(" ms...\n");
+            sleep_ms(n);
+            print_string("Done.\n");
+        } else {
+            print_string("Usage: sleep <ms> (1-10000)\n");
+        }
     } else if (strcmp(cmd, "reboot") == 0) {
         print_string("Rebooting...\n");
         reboot();
@@ -173,6 +191,7 @@ void kernel_main(void)
     init_screen();
     init_keyboard();
     init_serial();
+    init_timer(100);
 
     debug_log("kernel_main started");
 

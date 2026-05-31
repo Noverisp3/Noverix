@@ -20,7 +20,8 @@ KERNEL_OBJS = \
 	$(BUILD_DIR)/serial.o \
 	$(BUILD_DIR)/gdt.o \
 	$(BUILD_DIR)/idt.o \
-	$(BUILD_DIR)/interrupt.o
+	$(BUILD_DIR)/interrupt.o \
+	$(BUILD_DIR)/timer.o
 
 KERNEL_SECTORS = $(shell powershell -noprofile -Command "if (Test-Path $(BUILD_DIR)/kernel.bin) { [math]::Ceiling((Get-Item $(BUILD_DIR)/kernel.bin).Length/512) } else { 64 }")
 
