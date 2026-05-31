@@ -215,11 +215,15 @@ shutdown Power off
 │   │   ├── idt.h             # registers_t struct, interrupt_handler_t typedef
 │   │   ├── interrupt.S       # ISR and IRQ stubs (GAS macros), common handler
 │   │   └── ports.h           # inb/outb/inw/outw inline asm helpers
+│   │   ├── timer.c           # Programmable Interval Timer (PIT)
+│   │   └── timer.h
 │   └── drivers/
 │       ├── keyboard.c        # PS/2 driver: scancode→ASCII, shift/caps, ring buffer
 │       ├── keyboard.h        # KEY_UP/DOWN/LEFT/RIGHT constants
 │       ├── screen.c          # VGA text mode: cursor, scroll, print_char/string/hex
 │       └── screen.h
+│       ├── serial.c          # COM1 serial port driver for debugging/logging
+│       └── serial.h
 ├── build/                    # Build artifacts (.o, .bin, .elf, os-image.bin)
 ├── bochsrc.bxrc              # Bochs emulator configuration
 ├── combine.ps1               # PowerShell script: concatenate + pad to 1.44 MB
