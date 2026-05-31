@@ -1,8 +1,11 @@
 #include "drivers/screen.h"
 #include "drivers/keyboard.h"
+#include "drivers/serial.h"
 #include "cpu/gdt.h"
 #include "cpu/idt.h"
 #include "cpu/ports.h"
+
+#define debug_log(msg) serial_write_string("[kernel] "); serial_write_string(msg); serial_write_char('\n')
 
 #define LINE_BUF 256
 #define PROMPT "Noveris$ "
@@ -31,12 +34,14 @@ static int strcmp(const char *a, const char *b)
 
 static void reboot(void)
 {
+    debug_log("reboot");
     while ((inb(0x64) & 0x02) != 0);
     outb(0x64, 0xFE);
 }
 
 static void shutdown(void)
 {
+    debug_log("shutdown");
     outw(0xB004, 0x2000);
     outw(0x604, 0x2000);
     __asm__ volatile ("cli; hlt");
@@ -157,6 +162,7 @@ static void handle_cmd(const char *buf)
         print_string("Unknown command: ");
         print_string(cmd);
         print_string("\n");
+        debug_log("unknown command"); serial_write_string(": "); serial_write_string(cmd); serial_write_char('\n');
     }
 }
 
@@ -166,6 +172,9 @@ void kernel_main(void)
     init_idt();
     init_screen();
     init_keyboard();
+    init_serial();
+
+    debug_log("kernel_main started");
 
     clear_screen();
     print_string("Noveris OS v0.1\n");
@@ -176,6 +185,7 @@ void kernel_main(void)
         char buf[LINE_BUF];
         print_string(PROMPT);
         readline(buf, LINE_BUF);
+        debug_log("cmd: "); serial_write_string(buf); serial_write_char('\n');
         handle_cmd(buf);
     }
 }

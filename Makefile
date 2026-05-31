@@ -17,6 +17,7 @@ KERNEL_OBJS = \
 	$(BUILD_DIR)/kernel.o \
 	$(BUILD_DIR)/screen.o \
 	$(BUILD_DIR)/keyboard.o \
+	$(BUILD_DIR)/serial.o \
 	$(BUILD_DIR)/gdt.o \
 	$(BUILD_DIR)/idt.o \
 	$(BUILD_DIR)/interrupt.o
