@@ -136,7 +136,7 @@ pm_trampoline:
     mov es, ax
     mov fs, ax
     mov gs, ax
-    mov esp, 0x10000
+    mov esp, 0x90000
 
     ; Backwards copy: source (0x0600) < dest (0x2000) with overlap.
     ; Starting at the top ensures source data is read before being overwritten.
