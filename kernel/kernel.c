@@ -132,7 +132,7 @@ static void handle_cmd(const char *buf)
         print_string("help     Show this help\n");
         print_string("echo     Print text\n");
         print_string("clear    Clear screen\n");
-        print_string("cls      Clear screen\n");
+
         print_string("hex      Print a number in hex\n");
         print_string("ver      Show version\n");
         print_string("sleep    Sleep for N milliseconds\n");
@@ -141,7 +141,7 @@ static void handle_cmd(const char *buf)
     } else if (strcmp(cmd, "echo") == 0) {
         if (arg[0]) print_string(arg);
         print_string("\n");
-    } else if (strcmp(cmd, "clear") == 0 || strcmp(cmd, "cls") == 0) {
+    } else if (strcmp(cmd, "clear") == 0) {
         clear_screen();
     } else if (strcmp(cmd, "hex") == 0) {
         unsigned int n = 0;
