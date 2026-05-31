@@ -35,6 +35,6 @@ unsigned int get_ticks(void)
 
 void sleep_ms(unsigned int ms)
 {
-    unsigned int target = tick_count + (ms / tick_ms) + 1;
+    unsigned int target = tick_count + (ms + tick_ms - 1) / tick_ms;
     while (tick_count < target);
 }
