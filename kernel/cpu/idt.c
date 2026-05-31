@@ -109,12 +109,15 @@ static void irq_remap(void)
 
 void register_interrupt_handler(int irq, interrupt_handler_t handler)
 {
+    __asm__ volatile ("cli");
     interrupt_handlers[irq] = handler;
+    __asm__ volatile ("sti");
 }
 
 void init_idt(void)
 {
     int i;
+
     idt_ptr.limit = sizeof(idt_entries) - 1;
     idt_ptr.base = (unsigned int)&idt_entries;
 
@@ -171,8 +174,9 @@ void init_idt(void)
     idt_set_entry(46, (unsigned int)irq14, 0x08, 0x8E);
     idt_set_entry(47, (unsigned int)irq15, 0x08, 0x8E);
 
+    __asm__ volatile ("lidt %0" : : "m" (idt_ptr));
+
     irq_remap();
 
-    __asm__ volatile ("lidt %0" : : "m" (idt_ptr));
     __asm__ volatile ("sti");
 }
