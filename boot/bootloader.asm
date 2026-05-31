@@ -13,7 +13,7 @@ start:
     mov ds, ax
     mov es, ax
     mov ss, ax
-    mov sp, 0x9000
+    mov sp, 0x7C00
     mov [boot_drive], dl
 
     mov si, msg_loading
@@ -136,7 +136,7 @@ pm_trampoline:
     mov es, ax
     mov fs, ax
     mov gs, ax
-    mov esp, 0x9000
+    mov esp, 0x10000
 
     ; Backwards copy: source (0x0600) < dest (0x2000) with overlap.
     ; Starting at the top ensures source data is read before being overwritten.
