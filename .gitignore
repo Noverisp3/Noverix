@@ -1,0 +1,35 @@
+# Build output
+build/
+*.o
+*.bin
+*.elf
+*.map
+*.img
+*.iso
+*.iso.*
+
+# Editor / OS
+*.swp
+*.swo
+*~
+*.bak
+.vs/
+.idea/
+*.suo
+*.user
+*.userosscache
+*.sln.docstates
+Thumbs.db
+.DS_Store
+
+# Bochs
+bochsout.txt
+*.bxrc.bak
+*.dbg
+
+# Toolchain
+*.exe
+*.com
+
+# Logs
+*.log

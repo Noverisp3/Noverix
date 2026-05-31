@@ -1,0 +1,181 @@
+#include "drivers/screen.h"
+#include "drivers/keyboard.h"
+#include "cpu/gdt.h"
+#include "cpu/idt.h"
+#include "cpu/ports.h"
+
+#define LINE_BUF 256
+#define PROMPT "Noveris$ "
+#define HISTORY_SIZE 16
+
+static char history[HISTORY_SIZE][LINE_BUF];
+static int history_count;
+
+static int strlen(const char *s)
+{
+    int n = 0;
+    while (*s++) n++;
+    return n;
+}
+
+static void strcpy(char *dst, const char *src)
+{
+    while ((*dst++ = *src++));
+}
+
+static int strcmp(const char *a, const char *b)
+{
+    while (*a && *a == *b) { a++; b++; }
+    return *(unsigned char*)a - *(unsigned char*)b;
+}
+
+static void reboot(void)
+{
+    while ((inb(0x64) & 0x02) != 0);
+    outb(0x64, 0xFE);
+}
+
+static void shutdown(void)
+{
+    outw(0xB004, 0x2000);
+    outw(0x604, 0x2000);
+    __asm__ volatile ("cli; hlt");
+}
+
+static void history_add(const char *buf)
+{
+    if (!buf[0]) return;
+    if (history_count > 0 && strcmp(buf, history[history_count - 1]) == 0)
+        return;
+    if (history_count < HISTORY_SIZE) history_count++;
+    for (int i = history_count - 1; i > 0; i--)
+        strcpy(history[i], history[i - 1]);
+    strcpy(history[0], buf);
+}
+
+static void readline(char *buf, int max)
+{
+    int i = 0;
+    buf[0] = 0;
+    int hist_pos = -1;
+    char saved[LINE_BUF];
+    while (i < max - 1) {
+        char c = read_char();
+        if (c == KEY_UP && history_count > 0) {
+            if (hist_pos == -1) {
+                strcpy(saved, buf);
+                hist_pos = 0;
+            } else if (hist_pos < history_count - 1) {
+                hist_pos++;
+            } else {
+                continue;
+            }
+            while (i > 0) { print_string("\b \b"); i--; }
+            strcpy(buf, history[hist_pos]);
+            i = strlen(buf);
+            print_string(buf);
+        } else if (c == KEY_DOWN) {
+            if (hist_pos == -1) continue;
+            hist_pos--;
+            while (i > 0) { print_string("\b \b"); i--; }
+            if (hist_pos >= 0) {
+                strcpy(buf, history[hist_pos]);
+            } else {
+                strcpy(buf, saved);
+            }
+            i = strlen(buf);
+            print_string(buf);
+        } else if (c == '\n') {
+            print_char('\n');
+            buf[i] = 0;
+            history_add(buf);
+            return;
+        } else if (c == '\b') {
+            if (i > 0) {
+                i--;
+                print_string("\b \b");
+                buf[i] = 0;
+            }
+        } else {
+            print_char(c);
+            buf[i++] = c;
+            buf[i] = 0;
+        }
+    }
+    buf[i] = 0;
+}
+
+static void handle_cmd(const char *buf)
+{
+    char cmd[LINE_BUF];
+    char arg[LINE_BUF];
+    int i = 0, j = 0;
+
+    while (buf[i] && buf[i] == ' ') i++;
+    while (buf[i] && buf[i] != ' ') cmd[j++] = buf[i++];
+    cmd[j] = 0;
+
+    while (buf[i] && buf[i] == ' ') i++;
+    j = 0;
+    while (buf[i]) arg[j++] = buf[i++];
+    arg[j] = 0;
+
+    if (strcmp(cmd, "help") == 0 || strcmp(cmd, "?") == 0) {
+        print_string("Noveris OS Shell\n");
+        print_string("----------------\n");
+        print_string("help     Show this help\n");
+        print_string("echo     Print text\n");
+        print_string("clear    Clear screen\n");
+        print_string("cls      Clear screen\n");
+        print_string("hex      Print a number in hex\n");
+        print_string("ver      Show version\n");
+        print_string("reboot   Reboot system\n");
+        print_string("shutdown Power off\n");
+    } else if (strcmp(cmd, "echo") == 0) {
+        if (arg[0]) print_string(arg);
+        print_string("\n");
+    } else if (strcmp(cmd, "clear") == 0 || strcmp(cmd, "cls") == 0) {
+        clear_screen();
+    } else if (strcmp(cmd, "hex") == 0) {
+        unsigned int n = 0;
+        int k = 0;
+        while (arg[k]) {
+            n = n * 10 + (arg[k] - '0');
+            k++;
+        }
+        print_hex(n);
+        print_string("\n");
+    } else if (strcmp(cmd, "ver") == 0) {
+        print_string("Noveris OS v0.1\n");
+    } else if (strcmp(cmd, "reboot") == 0) {
+        print_string("Rebooting...\n");
+        reboot();
+    } else if (strcmp(cmd, "shutdown") == 0 || strcmp(cmd, "poweroff") == 0) {
+        print_string("Shutting down...\n");
+        shutdown();
+    } else if (cmd[0]) {
+        print_string("Unknown command: ");
+        print_string(cmd);
+        print_string("\n");
+    }
+}
+
+void kernel_main(void)
+{
+    init_gdt();
+    init_idt();
+    init_screen();
+    init_keyboard();
+
+    clear_screen();
+    print_string("Noveris OS v0.1\n");
+    print_string("================\n");
+    print_string("Type 'help' for commands.\n\n");
+
+    while (1) {
+        char buf[LINE_BUF];
+        print_string(PROMPT);
+        readline(buf, LINE_BUF);
+        handle_cmd(buf);
+    }
+}
