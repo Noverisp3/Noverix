@@ -1,8 +1,8 @@
 [org 0x7C00]
 [bits 16]
 
-KERNEL_OFFSET  equ 0x2000
-KERNEL_LOAD_ADDR equ 0x0600
+KERNEL_OFFSET      equ 0x2000
+KERNEL_LOAD_ADDR   equ 0x9000
 
 %ifndef KERNEL_SECTORS
 %define KERNEL_SECTORS 64
@@ -13,19 +13,23 @@ start:
     mov ds, ax
     mov es, ax
     mov ss, ax
-    mov sp, 0x7C00
+    mov sp, 0x7C00 - 512          ; safe stack, avoid IVT/BDA
     mov [boot_drive], dl
 
     mov si, msg_loading
     call print_string
 
+    ; Load kernel to KERNEL_LOAD_ADDR (0x9000)
     mov bx, KERNEL_LOAD_ADDR
     mov cx, KERNEL_SECTORS
     mov dl, [boot_drive]
     call disk_load
 
-    ; Copy PM trampoline to safe address below kernel range
-    ; so the rep movsd that copies kernel data won't overwrite its own code
+    ; Print success message
+    mov si, msg_loaded
+    call print_string
+
+    ; Copy trampoline code to safe area (0x0500)
     mov si, pm_trampoline
     mov di, PM_TRAMPOLINE_ADDR
     mov cx, pm_trampoline_end - pm_trampoline
@@ -34,6 +38,7 @@ start:
 
     jmp switch_to_pm
 
+; Print string function (BIOS teletype)
 print_string:
     push ax
     push bx
@@ -50,13 +55,14 @@ print_string:
     pop ax
     ret
 
+; Disk read using CHS (supports up to 1.44MB)
 disk_load:
     pusha
 
     mov [disk_drive], dl
     mov [disk_sectors], cx
     mov [disk_buffer], bx
-    mov byte [sector], 2
+    mov byte [sector], 2        ; starting sector (sector 1 is boot sector)
     mov byte [head], 0
     mov byte [cylinder], 0
 
@@ -95,6 +101,44 @@ disk_load:
     call print_string
     jmp $
 
+; Enable A20 using multiple methods
+enable_a20:
+    pusha
+    ; Method 1: port 0x92 (fast, used on newer motherboards)
+    in al, 0x92
+    test al, 2
+    jnz .a20_on
+    or al, 2
+    out 0x92, al
+    ; verify again
+    in al, 0x92
+    test al, 2
+    jnz .a20_on
+
+    ; Method 2: Keyboard controller (ports 0x64, 0x60)
+    call .wait_kbc_write
+    mov al, 0xD1        ; command write output port
+    out 0x64, al
+    call .wait_kbc_write
+    mov al, 0xDF        ; bit 2 = 1 (enable A20)
+    out 0x60, al
+    call .wait_kbc_write
+
+    ; Method 3: BIOS int 0x15 (if available)
+    mov ax, 0x2401
+    int 0x15
+
+.a20_on:
+    popa
+    ret
+
+.wait_kbc_write:
+    in al, 0x64
+    test al, 2
+    jnz .wait_kbc_write
+    ret
+
+; 32-bit GDT (flat)
 gdt_start:
     dq 0x0000000000000000
 gdt_code:
@@ -114,20 +158,17 @@ DATA_SEG equ gdt_data - gdt_start
 
 PM_TRAMPOLINE_ADDR equ 0x0500
 
+; Switch to protected mode
 switch_to_pm:
     cli
     lgdt [gdt_descriptor]
-
-    in al, 0x92
-    or al, 0x02
-    out 0x92, al
-
+    call enable_a20          ; enable A20 using multiple methods
     mov eax, cr0
     or eax, 0x01
     mov cr0, eax
-
     jmp CODE_SEG:PM_TRAMPOLINE_ADDR
 
+; Trampoline (runs in protected mode)
 [bits 32]
 pm_trampoline:
     mov ax, DATA_SEG
@@ -138,30 +179,32 @@ pm_trampoline:
     mov gs, ax
     mov esp, 0x90000
 
-    ; Backwards copy: source (0x0600) < dest (0x2000) with overlap.
-    ; Starting at the top ensures source data is read before being overwritten.
+    ; Copy kernel from KERNEL_LOAD_ADDR (0x9000) to KERNEL_OFFSET (0x2000)
+    ; Use backwards copy to avoid overwriting when destination overlaps
     mov esi, KERNEL_LOAD_ADDR + KERNEL_SECTORS * 512 - 4
     mov edi, KERNEL_OFFSET + KERNEL_SECTORS * 512 - 4
-    mov ecx, KERNEL_SECTORS * 128
+    mov ecx, KERNEL_SECTORS * 128      ; 512 bytes / 4 = 128 dwords per sector
     std
     rep movsd
     cld
 
+    ; Jump into kernel
     mov eax, KERNEL_OFFSET
     call eax
     jmp $
 pm_trampoline_end:
 
-boot_drive  db 0
-msg_loading db "Noveris OS - Loading kernel...", 13, 10, 0
-msg_disk_error db "Disk error! Halting.", 13, 10, 0
+boot_drive      db 0
+msg_loading     db "Noveris OS - Loading kernel...", 13, 10, 0
+msg_loaded      db "Kernel loaded successfully.", 13, 10, 0
+msg_disk_error  db "Disk error! Halting.", 13, 10, 0
 
-disk_buffer dw 0
-disk_sectors dw 0
-disk_drive  db 0
-sector      db 2
-head        db 0
-cylinder    db 0
+disk_buffer     dw 0
+disk_sectors    dw 0
+disk_drive      db 0
+sector          db 2
+head            db 0
+cylinder        db 0
 
 times 510 - ($ - $$) db 0
 dw 0xAA55
