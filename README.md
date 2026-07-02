@@ -16,6 +16,7 @@ A minimal x86 hobby operating system built from scratch. Boots from real mode in
 | **Serial I/O** | COM1 serial port driver for kernel logging and debugging. |
 | **Memory** | Page Frame Allocator (bitmap-based, 1 bit per 4KB frame, 8192 frames for 32MB). |
 | **Paging** | 32-bit x86 two-level paging (PD + PT), identity map 0–32MB, `map_page()` for custom mappings, CR0.PG enabled. |
+| **Heap** | `malloc`/`free` allocator at 0x800000 (2MB), boundary-tag first-fit, split/coalesce, serial OOM logging. |
 | **Shell** | Command history (UP/DOWN), inline editing (LEFT/RIGHT/Backspace), `help`, `echo` (print/write file), `cat`, `ls`, `rm`, `clear`, `hex`, `ver`, `sleep`, `ata`, `crash`, `reboot`, `shutdown`. |
 
 ## Requirements
@@ -134,6 +135,7 @@ shutdown Power off
 │   ├── memory/
 │   │   ├── pfa.c/h           # Page Frame Allocator (bitmap, 32MB)
 │   │   ├── paging.c/h        # Paging (PD/PT, identity map, CR0.PG)
+│   │   ├── heap.c/h          # Heap allocator (malloc/free, boundary tags)
 │   └── drivers/
 │       ├── ata.c/h           # ATA PIO driver (LBA28, IDENTIFY)
 │       ├── fat16.c/h         # FAT16 filesystem driver
@@ -182,6 +184,7 @@ _start → kernel_main
   ├── init_screen() / init_keyboard() / init_timer()
   ├── pfa_init() — page frame allocator (bitmap, mark reserved frames)
   ├── init_paging() — identity map 32MB, enable CR0.PG
+  ├── heap_init() — malloc/free at 0x800000 (2MB)
   ├── ata_init() — probe ATA drives
   ├── fat_mount() — mount FAT16 volume
   └── Shell loop
@@ -192,6 +195,7 @@ _start → kernel_main
 - **No standard library** — kernel is `-ffreestanding -nostdlib`. Custom `strlen`/`strcpy`/`strcmp`.
 - **BSS zeroing** in entry.S prevents crashes when static variables extend past loaded sectors.
 - **Paging** uses identity mapping (virt = phys) for first 32MB. Page directory at dynamically allocated physical frame. `map_page()` supports custom non-identity mappings.
+- **Heap** at 0x800000–0xA00000 (2MB, identity mapped). Boundary tag allocator: each block has a 4-byte header (size + LSB alloc flag) and 4-byte footer for O(1) backward merge. Minimum allocation 12 bytes.
 - **ATA on secondary channel** — QEMU's `-device ide-hd` attaches to channel 1. The FAT driver probes all channels.
 - **FAT16 superfloppy** — raw 16 MB image formatted with `mkfs.fat -F16`, no MBR partition table.
 - **mtools access** — `mdir -i disk.img`, `mcopy -i disk.img file ::/`, etc.

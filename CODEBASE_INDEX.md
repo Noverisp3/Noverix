@@ -17,6 +17,7 @@ BIOS
              ├─ kernel/cpu/timer.c     → PIT IRQ0
              ├─ kernel/memory/pfa.c    → page frame allocator
              ├─ kernel/memory/paging.c → identity map 32MB, enable CR0.PG
+             ├─ kernel/memory/heap.c   → malloc/free allocator
              ├─ kernel/drivers/ata.c   → ATA probe
              ├─ kernel/drivers/fat16.c → mount FAT16 from ATA LBA
              └─ while(1): readline → handle_cmd → dispatch
@@ -42,6 +43,7 @@ Project_002_OS/
 │   ├── memory/
 │   │   ├── pfa.c / pfa.h     # Page Frame Allocator (bitmap, 32MB)
 │   │   ├── paging.c / paging.h # Paging (PD/PT, identity map, CR0.PG)
+│   │   ├── heap.c / heap.h   # Heap allocator (malloc/free, boundary tags)
 │   └── drivers/
 │       ├── ata.c / ata.h     # ATA PIO: probe, LBA28 read/write
 │       ├── fat16.c / fat16.h # FAT16: mount, list, read, write, delete
@@ -92,7 +94,7 @@ Project_002_OS/
   - `history_add(buf)`: Thêm lệnh vào lịch sử (mảng 16 phần tử) | [strcpy, strcmp]
   - `readline(buf, max)`: Đọc input từ keyboard, inline editing (LEFT/RIGHT di chuyển, insert/delete giữa dòng), UP/DOWN history | [read_char, print_string, history_add]
   - `handle_cmd(buf)`: Parse cmd/arg, dispatch | [strcmp, print_string, clear_screen, print_hex, sleep_ms, ata_drive_exists, ata_get_model, fat_read, fat_list, fat_write, fat_delete, reboot, shutdown]
-  - `kernel_main(void)`: Init sequence → shell loop | [init_serial, init_gdt, init_idt, init_screen, init_keyboard, init_timer, pfa_init, init_paging, ata_init, fat_mount]
+  - `kernel_main(void)`: Init sequence → shell loop | [init_serial, init_gdt, init_idt, init_screen, init_keyboard, init_timer, pfa_init, init_paging, heap_init, ata_init, fat_mount]
 - **Import:** `screen.h`, `keyboard.h`, `serial.h`, `ata.h`, `fat16.h`, `gdt.h`, `idt.h`, `timer.h`, `ports.h`
 
 ---
@@ -193,6 +195,19 @@ Project_002_OS/
   - `read_cr0(void)`: Trả về CR0 | []
   - `read_cr3(void)`: Trả về CR3 | []
 - **Import:** `pfa.h`, `serial.h`
+
+---
+
+### `kernel/memory/heap.c` + `heap.h`
+
+- **Vai trò:** Kernel heap allocator — boundary-tag first-fit malloc/free.
+- **Hằng số:** `HEAP_START=0x800000`, `HEAP_SIZE=0x200000` (2MB region, identity mapped)
+- **Hàm:**
+  - `heap_init(void)`: Tạo 1 free block chiếm toàn bộ HEAP_SIZE | [set_footer, serial_write_string]
+  - `malloc(size)`: Walk các block → first-fit → split nếu remainder >= MIN_BLOCK (12) → trả về ptr sau header | [set_footer]
+  - `free(ptr)`: Mark free → merge với next block (nếu free) → merge với prev block qua boundary tag footer | [set_footer]
+  - `set_footer(addr, size)`: Ghi size vào cuối block (dùng cho boundary tag) | []
+- **Import:** `serial.h`
 
 ---
 
