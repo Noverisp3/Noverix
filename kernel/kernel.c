@@ -9,6 +9,7 @@
 #include "cpu/ports.h"
 #include "memory/pfa.h"
 #include "memory/paging.h"
+#include "memory/heap.h"
 
 #define debug_log(msg) serial_write_string("[kernel] "); serial_write_string(msg); serial_write_char('\n')
 
@@ -323,6 +324,35 @@ void kernel_main(void)
             serial_write_char('\n');
 
             free_frame(phys);
+        }
+    }
+
+    heap_init();
+
+    {
+        serial_write_string("[test] heap malloc/free\n");
+        char *a = (char *)malloc(32);
+        char *b = (char *)malloc(64);
+        char *c = (char *)malloc(128);
+        if (a && b && c) {
+            a[0] = 'H'; a[1] = 'e'; a[2] = 0;
+            b[0] = 'W'; b[1] = 'o'; b[2] = 0;
+            serial_write_string("[test] a="); serial_write_string(a);
+            serial_write_string(" b="); serial_write_string(b);
+            serial_write_string(" c="); serial_write_hex((unsigned int)c);
+            serial_write_string(" free a+b -> alloc 96=");
+            free(a); free(b);
+            char *d = (char *)malloc(96);
+            if (d) {
+                d[0] = 'X';
+                serial_write_string("OK d="); serial_write_hex((unsigned int)d);
+            } else {
+                serial_write_string("FAIL");
+            }
+            serial_write_char('\n');
+            free(c); free(d);
+        } else {
+            serial_write_string("[test] heap FAIL\n");
         }
     }
 

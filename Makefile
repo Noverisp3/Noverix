@@ -24,7 +24,8 @@ KERNEL_OBJS = \
 	$(BUILD_DIR)/interrupt.o \
 	$(BUILD_DIR)/timer.o \
 	$(BUILD_DIR)/pfa.o \
-	$(BUILD_DIR)/paging.o
+	$(BUILD_DIR)/paging.o \
+	$(BUILD_DIR)/heap.o
 
 .PHONY: all clean run run-qemu
 
@@ -61,7 +62,7 @@ clean:
 	rm -rf $(BUILD_DIR)
 
 run-qemu: $(BUILD_DIR)/os-image.bin
-	qemu-system-x86_64 -drive format=raw,file=$<,if=floppy -drive file=disk.img,format=raw,if=none,id=ata0 -device ide-hd,drive=ata0 -m 32
+	qemu-system-x86_64 -boot order=a -drive format=raw,file=$<,if=floppy -drive file=disk.img,format=raw,if=none,id=ata0 -device ide-hd,drive=ata0 -m 32
 
 run: $(BUILD_DIR)/os-image.bin
 	bochs -q -f bochsrc.bxrc
