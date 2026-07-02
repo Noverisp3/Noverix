@@ -137,6 +137,7 @@ static void handle_cmd(const char *buf)
         print_string("ver      Show version\n");
         print_string("sleep    Sleep for N milliseconds\n");
         print_string("reboot   Reboot system\n");
+        print_string("crash    Trigger a crash (for testing)\n");
         print_string("shutdown Power off\n");
     } else if (strcmp(cmd, "echo") == 0) {
         if (arg[0]) print_string(arg);
@@ -170,6 +171,9 @@ static void handle_cmd(const char *buf)
         } else {
             print_string("Usage: sleep <ms> (1-10000)\n");
         }
+    } else if (strcmp(cmd, "crash") == 0) {
+        print_string("Triggering exception...\n");
+        __asm__ volatile ("ud2");
     } else if (strcmp(cmd, "reboot") == 0) {
         print_string("Rebooting...\n");
         reboot();
@@ -186,11 +190,11 @@ static void handle_cmd(const char *buf)
 
 void kernel_main(void)
 {
+    init_serial();
     init_gdt();
     init_idt();
     init_screen();
     init_keyboard();
-    init_serial();
     init_timer(100);
 
     debug_log("kernel_main started");

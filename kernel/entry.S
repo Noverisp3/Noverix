@@ -1,4 +1,4 @@
-.extern _kernel_main
+.extern kernel_main
 .globl _start
 _start:
-    jmp _kernel_main
+    jmp kernel_main

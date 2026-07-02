@@ -1,5 +1,7 @@
 #include "idt.h"
 #include "ports.h"
+#include "../drivers/screen.h"
+#include "../drivers/serial.h"
 
 typedef struct {
     unsigned short base_low;
@@ -77,10 +79,108 @@ static void idt_set_entry(unsigned char num, unsigned int base, unsigned short s
     idt_entries[num].flags = flags;
 }
 
+static const char *exception_names[32] = {
+    "Division By Zero",
+    "Debug",
+    "Non-Maskable Interrupt",
+    "Breakpoint",
+    "Overflow",
+    "Bound Range Exceeded",
+    "Invalid Opcode",
+    "Device Not Available",
+    "Double Fault",
+    "Coprocessor Segment Overrun",
+    "Invalid TSS",
+    "Segment Not Present",
+    "Stack-Segment Fault",
+    "General Protection Fault",
+    "Page Fault",
+    "Reserved",
+    "x87 Floating-Point Exception",
+    "Alignment Check",
+    "Machine Check",
+    "SIMD Floating-Point Exception",
+    "Virtualization Exception",
+    "Reserved",
+    "Reserved",
+    "Reserved",
+    "Reserved",
+    "Reserved",
+    "Reserved",
+    "Reserved",
+    "Reserved",
+    "Reserved",
+    "Security Exception",
+    "Reserved"
+};
+
+static void dump_registers(registers_t *regs)
+{
+    print_string("EIP: "); print_hex(regs->eip);
+    print_string("  CS: "); print_hex(regs->cs);
+    print_string("  EFLAGS: "); print_hex(regs->eflags);
+    print_string("\n\n");
+
+    print_string("EAX: "); print_hex(regs->eax);
+    print_string("  EBX: "); print_hex(regs->ebx);
+    print_string("  ECX: "); print_hex(regs->ecx);
+    print_string("  EDX: "); print_hex(regs->edx);
+    print_string("\n");
+
+    print_string("ESI: "); print_hex(regs->esi);
+    print_string("  EDI: "); print_hex(regs->edi);
+    print_string("  EBP: "); print_hex(regs->ebp);
+    print_string("  ESP: "); print_hex(regs->esp);
+    print_string("\n\n");
+
+    print_string("DS: "); print_hex(regs->ds);
+    print_string("  ES: "); print_hex(regs->es);
+    print_string("  FS: "); print_hex(regs->fs);
+    print_string("  GS: "); print_hex(regs->gs);
+    print_string("\n");
+}
+
+static void exception_handler(registers_t *regs)
+{
+    clear_screen();
+    print_string("\n!!! CPU EXCEPTION !!!\n\n");
+    print_string("Exception: ");
+    print_hex(regs->int_no);
+    print_string(" - ");
+    if (regs->int_no < 32)
+        print_string(exception_names[regs->int_no]);
+    else
+        print_string("Unknown");
+    print_string("\n");
+
+    print_string("Error code: "); print_hex(regs->err_code);
+    print_string("\n\n");
+
+    dump_registers(regs);
+
+    print_string("\nSystem halted.\n");
+
+    serial_write_string("\n!!! CPU EXCEPTION !!!\n");
+    serial_write_string("Exception: "); serial_write_hex(regs->int_no);
+    serial_write_string(" - ");
+    if (regs->int_no < 32)
+        serial_write_string(exception_names[regs->int_no]);
+    serial_write_string("\n");
+    serial_write_string("Error code: "); serial_write_hex(regs->err_code);
+    serial_write_string(" EIP: "); serial_write_hex(regs->eip);
+    serial_write_string(" CS: "); serial_write_hex(regs->cs);
+    serial_write_string("\n");
+
+    __asm__ volatile ("cli; hlt");
+    while (1);
+}
+
 void isr_handler(registers_t *regs)
 {
     if (interrupt_handlers[regs->int_no])
         interrupt_handlers[regs->int_no](regs);
+    else if (regs->int_no < 32)
+        exception_handler(regs);
 }
 
 void irq_handler(registers_t *regs)

@@ -1,23 +1,23 @@
 .section .text
 
 .macro ISR_NOERR num
-.globl _isr\num
-_isr\num:
+.globl isr\num
+isr\num:
     pushl $0
     pushl $\num
     jmp isr_common
 .endm
 
 .macro ISR_ERR num
-.globl _isr\num
-_isr\num:
+.globl isr\num
+isr\num:
     pushl $\num
     jmp isr_common
 .endm
 
 .macro IRQ num vec
-.globl _irq\num
-_irq\num:
+.globl irq\num
+irq\num:
     pushl $0
     pushl $\vec
     jmp irq_common
@@ -85,7 +85,7 @@ isr_common:
     mov %ax, %fs
     mov %ax, %gs
     pushl %esp
-    call _isr_handler
+    call isr_handler
     addl $4, %esp
     popl %gs
     popl %fs
@@ -107,7 +107,7 @@ irq_common:
     mov %ax, %fs
     mov %ax, %gs
     pushl %esp
-    call _irq_handler
+    call irq_handler
     addl $4, %esp
     popl %gs
     popl %fs

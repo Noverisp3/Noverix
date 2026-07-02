@@ -1,10 +1,9 @@
 ASM=nasm
-CC=gcc
+CC=clang
+LD=ld.bfd
 OBJCOPY=objcopy
 CFLAGS=-ffreestanding -m32 -Wall -Wextra -nostdlib -fno-pie -c
-LDFLAGS=-m32 -nostdlib -nostartfiles -fno-pie -no-pie -e _start
-LDFLAGS+=-Wl,--image-base,0x1000
-LDFLAGS+=-Wl,--file-alignment,0x200
+LDFLAGS=-m elf_i386 -T linker.ld -Map kernel.map
 
 BUILD_DIR=build
 
@@ -23,9 +22,7 @@ KERNEL_OBJS = \
 	$(BUILD_DIR)/interrupt.o \
 	$(BUILD_DIR)/timer.o
 
-KERNEL_SECTORS = $(shell powershell -noprofile -Command "if (Test-Path $(BUILD_DIR)/kernel.bin) { [math]::Ceiling((Get-Item $(BUILD_DIR)/kernel.bin).Length/512) } else { 64 }")
-
-.PHONY: all clean run
+.PHONY: all clean run run-qemu
 
 all: $(BUILD_DIR)/os-image.bin
 
@@ -42,19 +39,25 @@ $(BUILD_DIR)/%.o: %.c | $(BUILD_DIR)
 	$(CC) $(CFLAGS) $< -o $@
 
 $(BUILD_DIR)/kernel.elf: $(KERNEL_OBJS) | $(BUILD_DIR)
-	$(CC) $(LDFLAGS) $(KERNEL_OBJS) -o $@
+	$(LD) $(LDFLAGS) $(KERNEL_OBJS) -o $@
 
 $(BUILD_DIR)/kernel.bin: $(BUILD_DIR)/kernel.elf | $(BUILD_DIR)
 	$(OBJCOPY) -O binary $< $@
 
 $(BUILD_DIR)/bootloader.bin: boot/bootloader.asm $(BUILD_DIR)/kernel.bin | $(BUILD_DIR)
-	$(ASM) -f bin boot/bootloader.asm -dKERNEL_SECTORS=$(KERNEL_SECTORS) -o $@
+	kernel_size=$$(stat -c%s $(BUILD_DIR)/kernel.bin); \
+	sectors=$$(( (kernel_size + 511) / 512 )); \
+	$(ASM) -f bin boot/bootloader.asm -dKERNEL_SECTORS=$$sectors -o $@
 
 $(BUILD_DIR)/os-image.bin: $(BUILD_DIR)/bootloader.bin $(BUILD_DIR)/kernel.bin | $(BUILD_DIR)
-	powershell -File combine.ps1 -boot $(BUILD_DIR)/bootloader.bin -kernel $(BUILD_DIR)/kernel.bin -output $@
+	cat $^ > $@
+	truncate -s 1474560 $@
 
 clean:
 	rm -rf $(BUILD_DIR)
+
+run-qemu: $(BUILD_DIR)/os-image.bin
+	qemu-system-x86_64 -drive format=raw,file=$<,if=floppy -m 32
 
 run: $(BUILD_DIR)/os-image.bin
 	bochs -q -f bochsrc.bxrc
