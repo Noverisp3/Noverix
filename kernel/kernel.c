@@ -63,11 +63,11 @@ static void history_add(const char *buf)
 
 static void readline(char *buf, int max)
 {
-    int i = 0;
+    int len = 0, pos = 0;
     buf[0] = 0;
     int hist_pos = -1;
     char saved[LINE_BUF];
-    while (i < max - 1) {
+    while (len < max - 1) {
         char c = read_char();
         if (c == KEY_UP && history_count > 0) {
             if (hist_pos == -1) {
@@ -78,39 +78,60 @@ static void readline(char *buf, int max)
             } else {
                 continue;
             }
-            while (i > 0) { print_string("\b \b"); i--; }
+            for (int i = 0; i < pos; i++) print_string("\b");
+            for (int i = 0; i < len; i++) print_char(' ');
+            for (int i = 0; i < len; i++) print_string("\b");
             strcpy(buf, history[hist_pos]);
-            i = strlen(buf);
-            print_string(buf);
+            len = strlen(buf);
+            pos = len;
+            for (int i = 0; i < len; i++) print_char(buf[i]);
         } else if (c == KEY_DOWN) {
             if (hist_pos == -1) continue;
             hist_pos--;
-            while (i > 0) { print_string("\b \b"); i--; }
+            for (int i = 0; i < pos; i++) print_string("\b");
+            for (int i = 0; i < len; i++) print_char(' ');
+            for (int i = 0; i < len; i++) print_string("\b");
             if (hist_pos >= 0) {
                 strcpy(buf, history[hist_pos]);
             } else {
                 strcpy(buf, saved);
             }
-            i = strlen(buf);
-            print_string(buf);
+            len = strlen(buf);
+            pos = len;
+            for (int i = 0; i < len; i++) print_char(buf[i]);
+        } else if (c == KEY_LEFT) {
+            if (pos > 0) { pos--; print_string("\b"); }
+        } else if (c == KEY_RIGHT) {
+            if (pos < len) { print_char(buf[pos]); pos++; }
         } else if (c == '\n') {
             print_char('\n');
-            buf[i] = 0;
+            buf[len] = 0;
             history_add(buf);
             return;
         } else if (c == '\b') {
-            if (i > 0) {
-                i--;
-                print_string("\b \b");
-                buf[i] = 0;
+            if (pos > 0) {
+                int old_pos = pos, old_len = len, j;
+                for (j = pos - 1; j < len - 1; j++) buf[j] = buf[j + 1];
+                len--; pos--;
+                for (j = 0; j < old_pos; j++) print_string("\b");
+                for (j = 0; j < old_len; j++) print_char(' ');
+                for (j = 0; j < old_len; j++) print_string("\b");
+                for (j = 0; j < len; j++) print_char(buf[j]);
+                for (j = len; j > pos; j--) print_string("\b");
             }
         } else {
-            print_char(c);
-            buf[i++] = c;
-            buf[i] = 0;
+            int old_pos = pos, old_len = len, j;
+            for (j = len; j > pos; j--) buf[j] = buf[j - 1];
+            buf[pos] = c;
+            len++; pos++;
+            for (j = 0; j < old_pos; j++) print_string("\b");
+            for (j = 0; j < old_len; j++) print_char(' ');
+            for (j = 0; j < old_len; j++) print_string("\b");
+            for (j = 0; j < len; j++) print_char(buf[j]);
+            for (j = len; j > pos; j--) print_string("\b");
         }
     }
-    buf[i] = 0;
+    buf[len] = 0;
 }
 
 static void handle_cmd(const char *buf)

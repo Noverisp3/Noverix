@@ -85,7 +85,7 @@ Project_002_OS/
   - `reboot()`: Gửi 0xFE đến port 0x64 | [inb, outb]
   - `shutdown()`: Ghi 0x2000 vào port 0xB004 + 0x604 | [outw]
   - `history_add(buf)`: Thêm lệnh vào lịch sử (mảng 16 phần tử) | [strcpy, strcmp]
-  - `readline(buf, max)`: Đọc input từ keyboard, xử lý UP/DOWN history | [read_char, print_string, history_add]
+  - `readline(buf, max)`: Đọc input từ keyboard, inline editing (LEFT/RIGHT di chuyển, insert/delete giữa dòng), UP/DOWN history | [read_char, print_string, history_add]
   - `handle_cmd(buf)`: Parse cmd/arg, dispatch | [strcmp, print_string, clear_screen, print_hex, sleep_ms, ata_drive_exists, ata_get_model, fat_read, fat_list, fat_write, fat_delete, reboot, shutdown]
   - `kernel_main(void)`: Init sequence → shell loop | [init_serial, init_gdt, init_idt, init_screen, init_keyboard, init_timer, ata_init, fat_mount]
 - **Import:** `screen.h`, `keyboard.h`, `serial.h`, `ata.h`, `fat16.h`, `gdt.h`, `idt.h`, `timer.h`, `ports.h`

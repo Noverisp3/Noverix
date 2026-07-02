@@ -14,7 +14,7 @@ A minimal x86 hobby operating system built from scratch. Boots from real mode in
 | **Interrupts** | IDT with 32 exception ISRs and 16 IRQs. Full register dump on exception (`ud2` crash command). |
 | **Timer (PIT)** | Atomic tick counter via `LOCK XADD`, `sleep_ms()` for delays. |
 | **Serial I/O** | COM1 serial port driver for kernel logging and debugging. |
-| **Shell** | Command history, `help`, `echo` (print/write file), `cat`, `ls`, `rm`, `clear`, `hex`, `ver`, `sleep`, `ata`, `crash`, `reboot`, `shutdown`. |
+| **Shell** | Command history (UP/DOWN), inline editing (LEFT/RIGHT/Backspace), `help`, `echo` (print/write file), `cat`, `ls`, `rm`, `clear`, `hex`, `ver`, `sleep`, `ata`, `crash`, `reboot`, `shutdown`. |
 
 ## Requirements
 
