@@ -29,6 +29,7 @@ static int strlen(const char *s)
 
 static void strcpy(char *dst, const char *src)
 {
+    if (!dst || !src) return;
     while ((*dst++ = *src++));
 }
 
@@ -67,11 +68,13 @@ static void history_add(const char *buf)
 static void readline(char *buf, int max)
 {
     int len = 0, pos = 0;
+    if (!buf || max <= 0) return;
     buf[0] = 0;
     int hist_pos = -1;
     char saved[LINE_BUF];
     while (len < max - 1) {
         char c = read_char();
+        if (pos > len) pos = len;
         if (c == KEY_UP && history_count > 0) {
             if (hist_pos == -1) {
                 strcpy(saved, buf);

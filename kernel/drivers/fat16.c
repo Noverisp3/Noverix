@@ -347,7 +347,10 @@ int fat_write(const char *name, const void *data, unsigned size)
         }
     }
 
-    if (first_cluster == 0 && size > 0) return -1;  // no space
+    if (first_cluster == 0 && size > 0) {
+        serial_write_string("[fat] disk full\n");
+        return -1;  // no space
+    }
 
     // Write directory entry
     if (read_sector(root_start + sec_idx, buf) != 0) return -1;

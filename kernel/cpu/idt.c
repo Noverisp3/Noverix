@@ -203,8 +203,8 @@ static void irq_remap(void)
     outb(0xA1, 0x02);
     outb(0x21, 0x01);
     outb(0xA1, 0x01);
-    outb(0x21, 0xFC);
-    outb(0xA1, 0xFF);
+    outb(0x21, 0xFC);   /* master: unmask IRQ0 (timer) + IRQ1 (keyboard) */
+    outb(0xA1, 0x00);   /* slave: unmask all IRQs (8-15) */
 }
 
 void register_interrupt_handler(int irq, interrupt_handler_t handler)

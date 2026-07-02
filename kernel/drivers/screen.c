@@ -56,6 +56,10 @@ void print_char(char c)
         if (cursor_x > 0) cursor_x--;
     } else if (c == '\r') {
         cursor_x = 0;
+        for (int i = 0; i < MAX_COLS; i++)
+            video[cursor_y * MAX_COLS + i] = (WHITE_ON_BLACK << 8) | ' ';
+        set_cursor(cursor_x, cursor_y);
+        return;
     } else if (c == '\t') {
         cursor_x = (cursor_x + 8) & ~7;
     } else {

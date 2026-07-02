@@ -22,6 +22,8 @@ void init_serial(void)
 void serial_write_char(char c)
 {
     while (!is_transmit_empty());
+    if (c == '\n')
+        outb(COM1, '\r');
     outb(COM1, c);
 }
 

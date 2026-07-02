@@ -3,6 +3,7 @@
 #include "serial.h"
 
 #define TIMEOUT 100000
+#define ATA_RETRIES 3
 
 static int ata_exists[2][2];
 static char ata_model[2][2][41];
@@ -82,39 +83,50 @@ static int ata_pio(int channel, int drive, unsigned int lba, unsigned char count
     if (!ata_drive_exists(channel, drive)) return -1;
     unsigned short base = channel ? 0x170 : 0x1F0;
 
-    outb(base + 6, 0xE0 | (drive << 4) | ((lba >> 24) & 0x0F));
-    outb(base + 2, count);
-    outb(base + 3, lba & 0xFF);
-    outb(base + 4, (lba >> 8) & 0xFF);
-    outb(base + 5, (lba >> 16) & 0xFF);
-    outb(base + 7, write ? 0x30 : 0x20);
+    for (int retry = 0; retry < ATA_RETRIES; retry++) {
+        outb(base + 6, 0xE0 | (drive << 4) | ((lba >> 24) & 0x0F));
+        outb(base + 2, count);
+        outb(base + 3, lba & 0xFF);
+        outb(base + 4, (lba >> 8) & 0xFF);
+        outb(base + 5, (lba >> 16) & 0xFF);
+        outb(base + 7, write ? 0x30 : 0x20);
 
-    unsigned short *buf = (unsigned short *)buffer;
-    for (int s = 0; s < count; s++) {
-        unsigned char st;
-        int timeout = TIMEOUT;
-        do {
-            st = inb(base + 7);
-            if (st & 1) return -1;
-        } while (timeout-- && ((st & 0x80) || !(st & 0x08)));
-        if (timeout < 0) return -1;
-
-        if (write) {
-            for (int i = 0; i < 256; i++)
-                outw(base, buf[s * 256 + i]);
-            timeout = TIMEOUT;
-            while (timeout--) {
+        unsigned short *buf = (unsigned short *)buffer;
+        int ok = 1;
+        for (int s = 0; s < count; s++) {
+            unsigned char st;
+            int timeout = TIMEOUT;
+            do {
                 st = inb(base + 7);
-                if (!(st & 0x80)) break;
+                if (st & 1) { ok = 0; break; }
+            } while (timeout-- && ((st & 0x80) || !(st & 0x08)));
+            if (timeout < 0 || !ok) { ok = 0; break; }
+
+            if (write) {
+                for (int i = 0; i < 256; i++)
+                    outw(base, buf[s * 256 + i]);
+                timeout = TIMEOUT;
+                while (timeout--) {
+                    st = inb(base + 7);
+                    if (!(st & 0x80)) break;
+                }
+                if (timeout < 0 || (st & 1)) { ok = 0; break; }
+            } else {
+                for (int i = 0; i < 256; i++)
+                    buf[s * 256 + i] = inw(base);
             }
-            if (timeout < 0) return -1;
-            if (st & 1) return -1;
-        } else {
-            for (int i = 0; i < 256; i++)
-                buf[s * 256 + i] = inw(base);
         }
+        if (ok) return 0;
+        serial_write_string("[ata] retry ch=");
+        serial_write_hex(channel);
+        serial_write_string(" dr=");
+        serial_write_hex(drive);
+        serial_write_string(" lba=");
+        serial_write_hex(lba);
+        serial_write_char('\n');
     }
-    return 0;
+    serial_write_string("[ata] FAIL after retries\n");
+    return -1;
 }
 
 int ata_read_sectors(int channel, int drive, unsigned int lba, unsigned char count, void *buffer)
