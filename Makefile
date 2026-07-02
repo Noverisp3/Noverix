@@ -17,6 +17,7 @@ KERNEL_OBJS = \
 	$(BUILD_DIR)/screen.o \
 	$(BUILD_DIR)/keyboard.o \
 	$(BUILD_DIR)/serial.o \
+	$(BUILD_DIR)/ata.o \
 	$(BUILD_DIR)/gdt.o \
 	$(BUILD_DIR)/idt.o \
 	$(BUILD_DIR)/interrupt.o \
@@ -57,7 +58,7 @@ clean:
 	rm -rf $(BUILD_DIR)
 
 run-qemu: $(BUILD_DIR)/os-image.bin
-	qemu-system-x86_64 -drive format=raw,file=$<,if=floppy -m 32
+	qemu-system-x86_64 -drive format=raw,file=$<,if=floppy -drive file=disk.img,format=raw,if=none,id=ata0 -device ide-hd,drive=ata0 -m 32
 
 run: $(BUILD_DIR)/os-image.bin
 	bochs -q -f bochsrc.bxrc

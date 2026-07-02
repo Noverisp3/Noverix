@@ -1,6 +1,7 @@
 #include "drivers/screen.h"
 #include "drivers/keyboard.h"
 #include "drivers/serial.h"
+#include "drivers/ata.h"
 #include "cpu/gdt.h"
 #include "cpu/idt.h"
 #include "cpu/timer.h"
@@ -138,6 +139,7 @@ static void handle_cmd(const char *buf)
         print_string("sleep    Sleep for N milliseconds\n");
         print_string("reboot   Reboot system\n");
         print_string("crash    Trigger a crash (for testing)\n");
+        print_string("ata      List ATA drives\n");
         print_string("shutdown Power off\n");
     } else if (strcmp(cmd, "echo") == 0) {
         if (arg[0]) print_string(arg);
@@ -171,6 +173,22 @@ static void handle_cmd(const char *buf)
         } else {
             print_string("Usage: sleep <ms> (1-10000)\n");
         }
+    } else if (strcmp(cmd, "ata") == 0) {
+        int found = 0;
+        for (int ch = 0; ch < 2; ch++) {
+            for (int dr = 0; dr < 2; dr++) {
+                if (ata_drive_exists(ch, dr)) {
+                    print_string("ATA ");
+                    print_hex(ch);
+                    print_string(":");
+                    print_string(dr ? "1 " : "0 ");
+                    print_string(ata_get_model(ch, dr));
+                    print_string("\n");
+                    found = 1;
+                }
+            }
+        }
+        if (!found) print_string("No drives found.\n");
     } else if (strcmp(cmd, "crash") == 0) {
         print_string("Triggering exception...\n");
         __asm__ volatile ("ud2");
@@ -196,6 +214,7 @@ void kernel_main(void)
     init_screen();
     init_keyboard();
     init_timer(100);
+    ata_init();
 
     debug_log("kernel_main started");
 
