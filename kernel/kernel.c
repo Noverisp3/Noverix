@@ -282,6 +282,50 @@ void kernel_main(void)
     init_timer(100);
     pfa_init();
     init_paging();
+
+    // Paging + PFA deep test
+    {
+        unsigned int cr0 = read_cr0(), cr3 = read_cr3();
+        serial_write_string("[test] CR0="); serial_write_hex(cr0);
+        serial_write_string(" CR3="); serial_write_hex(cr3);
+        serial_write_string(" PG="); serial_write_hex(cr0 & 0x80000000 ? 1 : 0);
+        serial_write_char('\n');
+
+        unsigned int *phys = (unsigned int *)alloc_frame();
+        serial_write_string("[test] alloc_frame="); serial_write_hex((unsigned int)phys);
+        serial_write_char('\n');
+
+        if (phys) {
+            phys[0] = 0xDEADBEEF;
+            phys[1] = 0xCAFEBABE;
+            serial_write_string("[test] write 0xDEADBEEF @ "); serial_write_hex((unsigned int)&phys[0]);
+            serial_write_string(" readback="); serial_write_hex(phys[0]);
+            serial_write_char('\n');
+
+            unsigned int test_virt = 0x00F00000;
+            int r = map_page(test_virt, (unsigned int)phys, PAGE_WRITE);
+            serial_write_string("[test] map_page("); serial_write_hex(test_virt);
+            serial_write_string(" -> "); serial_write_hex((unsigned int)phys);
+            serial_write_string(")="); serial_write_hex(r);
+            serial_write_char('\n');
+
+            unsigned int *virt = (unsigned int *)test_virt;
+            serial_write_string("[test] virt read="); serial_write_hex(virt[0]);
+            serial_write_string(" "); serial_write_hex(virt[1]);
+            serial_write_char('\n');
+
+            virt[0] = 0x12345678;
+            serial_write_string("[test] phys read after virt write="); serial_write_hex(phys[0]);
+            serial_write_char('\n');
+
+            int ok = (phys[0] == 0x12345678 && phys[1] == 0xCAFEBABE);
+            serial_write_string("[test] paging "); serial_write_string(ok ? "PASS" : "FAIL");
+            serial_write_char('\n');
+
+            free_frame(phys);
+        }
+    }
+
     ata_init();
     if (fat_mount() == 0) {
         debug_log("FAT16 mounted");

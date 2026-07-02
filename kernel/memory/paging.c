@@ -64,3 +64,33 @@ void init_paging(void)
 
     serial_write_string("[paging] enabled\n");
 }
+
+int map_page(unsigned int virt, unsigned int phys, unsigned int flags)
+{
+    unsigned int pde_idx = PDE_IDX(virt);
+
+    if (!(page_dir[pde_idx] & PAGE_PRESENT)) {
+        if (!create_table(virt, flags)) return -1;
+    }
+
+    page_table_entry_t *table = (page_table_entry_t *)(page_dir[pde_idx] & 0xFFFFF000);
+    unsigned int pte_idx = PTE_IDX(virt);
+    table[pte_idx] = (phys & 0xFFFFF000) | PAGE_PRESENT | (flags & (PAGE_WRITE | PAGE_USER));
+
+    __asm__ volatile ("invlpg (%0)" : : "r" (virt) : "memory");
+    return 0;
+}
+
+unsigned int read_cr3(void)
+{
+    unsigned int val;
+    __asm__ volatile ("mov %%cr3, %0" : "=r" (val));
+    return val;
+}
+
+unsigned int read_cr0(void)
+{
+    unsigned int val;
+    __asm__ volatile ("mov %%cr0, %0" : "=r" (val));
+    return val;
+}

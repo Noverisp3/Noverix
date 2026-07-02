@@ -15,6 +15,8 @@ BIOS
              ├─ kernel/drivers/screen.c → VGA text mode
              ├─ kernel/drivers/keyboard.c → PS/2 IRQ1
              ├─ kernel/cpu/timer.c     → PIT IRQ0
+             ├─ kernel/memory/pfa.c    → page frame allocator
+             ├─ kernel/memory/paging.c → identity map 32MB, enable CR0.PG
              ├─ kernel/drivers/ata.c   → ATA probe
              ├─ kernel/drivers/fat16.c → mount FAT16 from ATA LBA
              └─ while(1): readline → handle_cmd → dispatch
@@ -37,6 +39,9 @@ Project_002_OS/
 │   │   ├── interrupt.S       # ISR/IRQ stubs, common handler asm
 │   │   ├── ports.h           # inb/outb/inw/outw inline asm
 │   │   ├── timer.c / timer.h # PIT channel 0, atomic tick, sleep_ms
+│   ├── memory/
+│   │   ├── pfa.c / pfa.h     # Page Frame Allocator (bitmap, 32MB)
+│   │   ├── paging.c / paging.h # Paging (PD/PT, identity map, CR0.PG)
 │   └── drivers/
 │       ├── ata.c / ata.h     # ATA PIO: probe, LBA28 read/write
 │       ├── fat16.c / fat16.h # FAT16: mount, list, read, write, delete
@@ -87,7 +92,7 @@ Project_002_OS/
   - `history_add(buf)`: Thêm lệnh vào lịch sử (mảng 16 phần tử) | [strcpy, strcmp]
   - `readline(buf, max)`: Đọc input từ keyboard, inline editing (LEFT/RIGHT di chuyển, insert/delete giữa dòng), UP/DOWN history | [read_char, print_string, history_add]
   - `handle_cmd(buf)`: Parse cmd/arg, dispatch | [strcmp, print_string, clear_screen, print_hex, sleep_ms, ata_drive_exists, ata_get_model, fat_read, fat_list, fat_write, fat_delete, reboot, shutdown]
-  - `kernel_main(void)`: Init sequence → shell loop | [init_serial, init_gdt, init_idt, init_screen, init_keyboard, init_timer, ata_init, fat_mount]
+  - `kernel_main(void)`: Init sequence → shell loop | [init_serial, init_gdt, init_idt, init_screen, init_keyboard, init_timer, pfa_init, init_paging, ata_init, fat_mount]
 - **Import:** `screen.h`, `keyboard.h`, `serial.h`, `ata.h`, `fat16.h`, `gdt.h`, `idt.h`, `timer.h`, `ports.h`
 
 ---
@@ -158,6 +163,36 @@ Project_002_OS/
   - `get_ticks(void)`: Trả tick_count | []
   - `sleep_ms(ms)`: Busy-wait dựa trên tick difference | []
 - **Import:** `idt.h`, `ports.h`
+
+---
+
+### `kernel/memory/pfa.c` + `pfa.h`
+
+- **Vai trò:** Page Frame Allocator — bitmap-based physical memory manager.
+- **Static data:** `bitmap[1024]` (8192 bits cho 32MB, 1 bit per 4KB frame)
+- **Hàm:**
+  - `pfa_init(void)`: Mark reserved frames (null page, kernel, stack, legacy 0xA0000-0xFFFFF) | [set_bit, serial_write_string]
+  - `alloc_frame(void)`: Scan bitmap → first 0 bit → set to 1 → trả về địa chỉ physical | [test_bit, set_bit]
+  - `free_frame(addr)`: Clear bit tương ứng | [clear_bit]
+  - `set_bit(frame)`: Nội bộ — set bit trong bitmap | []
+  - `clear_bit(frame)`: Nội bộ — clear bit | []
+  - `test_bit(frame)`: Nội bộ — test bit | []
+  - `mark_frame(addr)`: Nội bộ — set bit cho frame chứa addr | [set_bit]
+- **Import:** `serial.h`, `bss_end` (linker symbol)
+
+---
+
+### `kernel/memory/paging.c` + `paging.h`
+
+- **Vai trò:** 32-bit x86 two-level paging. Identity map 0-32MB, enable CR0.PG.
+- **Static data:** `page_dir` (1024 PDEs, allocated from PFA)
+- **Hàm:**
+  - `init_paging(void)`: Alloc PD + first PT + PTs 4-32MB → load CR3 → set CR0.PG | [alloc_frame, create_table]
+  - `create_table(virt, flags)`: Nội bộ — alloc page table, set PDE | [alloc_frame]
+  - `map_page(virt, phys, flags)`: Map virtual → physical, tạo PT nếu chưa có, invlpg | [create_table]
+  - `read_cr0(void)`: Trả về CR0 | []
+  - `read_cr3(void)`: Trả về CR3 | []
+- **Import:** `pfa.h`, `serial.h`
 
 ---
 
