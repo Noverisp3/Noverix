@@ -2,6 +2,7 @@
 #include "drivers/keyboard.h"
 #include "drivers/serial.h"
 #include "drivers/ata.h"
+#include "drivers/fat16.h"
 #include "cpu/gdt.h"
 #include "cpu/idt.h"
 #include "cpu/timer.h"
@@ -140,10 +141,28 @@ static void handle_cmd(const char *buf)
         print_string("reboot   Reboot system\n");
         print_string("crash    Trigger a crash (for testing)\n");
         print_string("ata      List ATA drives\n");
+        print_string("ls       List files\n");
+        print_string("echo     Print text or write file (echo text > file)\n");
+        print_string("rm       Delete file\n");
         print_string("shutdown Power off\n");
     } else if (strcmp(cmd, "echo") == 0) {
-        if (arg[0]) print_string(arg);
-        print_string("\n");
+        char *redir = arg;
+        while (*redir && *redir != '>') redir++;
+        if (*redir == '>') {
+            *redir = 0;
+            char *content = arg;
+            char *fname = redir + 1;
+            while (*fname == ' ') fname++;
+            if (fname[0]) {
+                if (fat_write(fname, content, strlen(content)) == 0)
+                    print_string("OK\n");
+                else
+                    print_string("FAIL\n");
+            }
+        } else {
+            if (arg[0]) print_string(arg);
+            print_string("\n");
+        }
     } else if (strcmp(cmd, "clear") == 0) {
         clear_screen();
     } else if (strcmp(cmd, "hex") == 0) {
@@ -189,6 +208,15 @@ static void handle_cmd(const char *buf)
             }
         }
         if (!found) print_string("No drives found.\n");
+    } else if (strcmp(cmd, "ls") == 0) {
+        fat_list();
+    } else if (strcmp(cmd, "rm") == 0) {
+        if (arg[0]) {
+            if (fat_delete(arg) == 0) print_string("OK\n");
+            else print_string("FAIL\n");
+        } else {
+            print_string("Usage: rm <file>\n");
+        }
     } else if (strcmp(cmd, "crash") == 0) {
         print_string("Triggering exception...\n");
         __asm__ volatile ("ud2");
@@ -215,6 +243,11 @@ void kernel_main(void)
     init_keyboard();
     init_timer(100);
     ata_init();
+    if (fat_mount() == 0) {
+        debug_log("FAT16 mounted");
+    } else {
+        debug_log("FAT16 mount failed");
+    }
 
     debug_log("kernel_main started");
 

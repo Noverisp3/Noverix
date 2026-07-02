@@ -79,15 +79,15 @@ void print_string(const char *str)
 
 void print_hex(unsigned int num)
 {
-    char hex[9];
+    char hex[11];
     int i;
     hex[0] = '0';
     hex[1] = 'x';
-    for (i = 7; i >= 2; i--) {
+    for (i = 9; i >= 2; i--) {
         unsigned char nibble = (unsigned char)(num & 0x0F);
         hex[i] = nibble < 10 ? '0' + nibble : 'A' + nibble - 10;
         num >>= 4;
     }
-    hex[8] = '\0';
+    hex[10] = '\0';
     print_string(hex);
 }

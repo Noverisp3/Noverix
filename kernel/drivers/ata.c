@@ -1,5 +1,6 @@
 #include "ata.h"
 #include "../cpu/ports.h"
+#include "serial.h"
 
 #define TIMEOUT 100000
 
@@ -24,20 +25,17 @@ int ata_init(void)
             outb(base + 5, 0);
 
             outb(cmd, 0xEC);
-
-            unsigned char s = inb(cmd);
-            if (s == 0) {
-                ata_exists[ch][dr] = 0;
-                continue;
-            }
+            (void)inb(cmd);
 
             int timeout = TIMEOUT;
-            while (timeout--) {
+            unsigned char s;
+            do {
                 s = inb(cmd);
-                if (s & 1) break;
-                if (!(s & 0x80) && (s & 0x08)) break;
-            }
-            if ((s & 1) || !(s & 0x08)) {
+                if (s == 0) break;
+                if (s == 0xFF) break;
+                if (!(s & 0x80)) break;
+            } while (timeout--);
+            if (s == 0 || s == 0xFF) {
                 ata_exists[ch][dr] = 0;
                 continue;
             }
@@ -50,8 +48,8 @@ int ata_init(void)
             detected++;
 
             for (int i = 0; i < 40; i += 2) {
-                ata_model[ch][dr][i] = buf[27 + i / 2] >> 8;
-                ata_model[ch][dr][i + 1] = buf[27 + i / 2] & 0xFF;
+                ata_model[ch][dr][i] = buf[27 + i / 2] & 0xFF;
+                ata_model[ch][dr][i + 1] = buf[27 + i / 2] >> 8;
             }
             ata_model[ch][dr][40] = '\0';
             for (int i = 39; i >= 0; i--) {
@@ -60,6 +58,7 @@ int ata_init(void)
                 else
                     break;
             }
+
         }
     }
     return detected;
@@ -78,7 +77,7 @@ const char *ata_get_model(int channel, int drive)
     return ata_model[channel][drive];
 }
 
-int ata_read_sectors(int channel, int drive, unsigned int lba, unsigned char count, void *buffer)
+static int ata_pio(int channel, int drive, unsigned int lba, unsigned char count, void *buffer, int write)
 {
     if (!ata_drive_exists(channel, drive)) return -1;
     unsigned short base = channel ? 0x170 : 0x1F0;
@@ -88,7 +87,7 @@ int ata_read_sectors(int channel, int drive, unsigned int lba, unsigned char cou
     outb(base + 3, lba & 0xFF);
     outb(base + 4, (lba >> 8) & 0xFF);
     outb(base + 5, (lba >> 16) & 0xFF);
-    outb(base + 7, 0x20);
+    outb(base + 7, write ? 0x30 : 0x20);
 
     unsigned short *buf = (unsigned short *)buffer;
     for (int s = 0; s < count; s++) {
@@ -99,8 +98,31 @@ int ata_read_sectors(int channel, int drive, unsigned int lba, unsigned char cou
             if (st & 1) return -1;
         } while (timeout-- && ((st & 0x80) || !(st & 0x08)));
         if (timeout < 0) return -1;
-        for (int i = 0; i < 256; i++)
-            buf[s * 256 + i] = inw(base);
+
+        if (write) {
+            for (int i = 0; i < 256; i++)
+                outw(base, buf[s * 256 + i]);
+            timeout = TIMEOUT;
+            while (timeout--) {
+                st = inb(base + 7);
+                if (!(st & 0x80)) break;
+            }
+            if (timeout < 0) return -1;
+            if (st & 1) return -1;
+        } else {
+            for (int i = 0; i < 256; i++)
+                buf[s * 256 + i] = inw(base);
+        }
     }
     return 0;
+}
+
+int ata_read_sectors(int channel, int drive, unsigned int lba, unsigned char count, void *buffer)
+{
+    return ata_pio(channel, drive, lba, count, buffer, 0);
+}
+
+int ata_write_sectors(int channel, int drive, unsigned int lba, unsigned char count, const void *buffer)
+{
+    return ata_pio(channel, drive, lba, count, (void *)buffer, 1);
 }

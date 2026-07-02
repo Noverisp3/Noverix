@@ -18,6 +18,7 @@ KERNEL_OBJS = \
 	$(BUILD_DIR)/keyboard.o \
 	$(BUILD_DIR)/serial.o \
 	$(BUILD_DIR)/ata.o \
+	$(BUILD_DIR)/fat16.o \
 	$(BUILD_DIR)/gdt.o \
 	$(BUILD_DIR)/idt.o \
 	$(BUILD_DIR)/interrupt.o \
