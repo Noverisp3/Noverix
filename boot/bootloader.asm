@@ -19,8 +19,11 @@ start:
     mov si, msg_loading
     call print_string
 
-    ; Load kernel to KERNEL_LOAD_ADDR (0x9000)
-    mov bx, KERNEL_LOAD_ADDR
+    ; Load kernel to linear address 0x9000 (ES=0x900, BX=0)
+    ; ES segment avoids 16-bit BX overflow when kernel > 56 sectors
+    mov ax, 0x900
+    mov es, ax
+    xor bx, bx
     mov cx, KERNEL_SECTORS
     mov dl, [boot_drive]
     call disk_load
@@ -28,6 +31,10 @@ start:
     ; Print success message
     mov si, msg_loaded
     call print_string
+
+    ; Restore ES=0 (rep movsb uses ES:DI, and we changed ES for disk load)
+    xor ax, ax
+    mov es, ax
 
     ; Copy trampoline code to safe area (0x0500)
     mov si, pm_trampoline
@@ -78,6 +85,11 @@ disk_load:
     jc .error
 
     add word [disk_buffer], 512
+    jnc .sector_ok
+    mov ax, es
+    add ax, 0x1000
+    mov es, ax
+.sector_ok:
     dec word [disk_sectors]
     jz .done
 
