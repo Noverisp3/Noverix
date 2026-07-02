@@ -7,6 +7,8 @@
 #include "cpu/idt.h"
 #include "cpu/timer.h"
 #include "cpu/ports.h"
+#include "memory/pfa.h"
+#include "memory/paging.h"
 
 #define debug_log(msg) serial_write_string("[kernel] "); serial_write_string(msg); serial_write_char('\n')
 
@@ -278,6 +280,8 @@ void kernel_main(void)
     init_screen();
     init_keyboard();
     init_timer(100);
+    pfa_init();
+    init_paging();
     ata_init();
     if (fat_mount() == 0) {
         debug_log("FAT16 mounted");

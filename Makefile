@@ -7,7 +7,7 @@ LDFLAGS=-m elf_i386 -T linker.ld -Map kernel.map
 
 BUILD_DIR=build
 
-SOURCE_DIRS=kernel kernel/drivers kernel/cpu
+SOURCE_DIRS=kernel kernel/drivers kernel/cpu kernel/memory
 vpath %.c $(SOURCE_DIRS)
 vpath %.S $(SOURCE_DIRS)
 
@@ -22,7 +22,9 @@ KERNEL_OBJS = \
 	$(BUILD_DIR)/gdt.o \
 	$(BUILD_DIR)/idt.o \
 	$(BUILD_DIR)/interrupt.o \
-	$(BUILD_DIR)/timer.o
+	$(BUILD_DIR)/timer.o \
+	$(BUILD_DIR)/pfa.o \
+	$(BUILD_DIR)/paging.o
 
 .PHONY: all clean run run-qemu
 
