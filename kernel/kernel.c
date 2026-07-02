@@ -132,18 +132,17 @@ static void handle_cmd(const char *buf)
         print_string("Noveris OS Shell\n");
         print_string("----------------\n");
         print_string("help     Show this help\n");
-        print_string("echo     Print text\n");
         print_string("clear    Clear screen\n");
-
+        print_string("echo     Print text or write file (echo text > file)\n");
+        print_string("cat      Display file contents\n");
+        print_string("ls       List files\n");
+        print_string("rm       Delete file\n");
         print_string("hex      Print a number in hex\n");
         print_string("ver      Show version\n");
         print_string("sleep    Sleep for N milliseconds\n");
-        print_string("reboot   Reboot system\n");
-        print_string("crash    Trigger a crash (for testing)\n");
         print_string("ata      List ATA drives\n");
-        print_string("ls       List files\n");
-        print_string("echo     Print text or write file (echo text > file)\n");
-        print_string("rm       Delete file\n");
+        print_string("crash    Trigger a crash (for testing)\n");
+        print_string("reboot   Reboot system\n");
         print_string("shutdown Power off\n");
     } else if (strcmp(cmd, "echo") == 0) {
         char *redir = arg;
@@ -208,6 +207,22 @@ static void handle_cmd(const char *buf)
             }
         }
         if (!found) print_string("No drives found.\n");
+    } else if (strcmp(cmd, "cat") == 0) {
+        if (arg[0]) {
+            char tmp[512];
+            int n = fat_read(arg, tmp, 511);
+            if (n > 0) {
+                tmp[n] = 0;
+                print_string(tmp);
+                print_char('\n');
+            } else if (n == 0) {
+                print_string("(empty)\n");
+            } else {
+                print_string("FAIL\n");
+            }
+        } else {
+            print_string("Usage: cat <file>\n");
+        }
     } else if (strcmp(cmd, "ls") == 0) {
         fat_list();
     } else if (strcmp(cmd, "rm") == 0) {

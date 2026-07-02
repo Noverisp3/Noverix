@@ -19,7 +19,6 @@ static unsigned root_start;
 static unsigned root_sectors;
 static unsigned data_start;
 
-static unsigned char buf[SECTOR_SIZE];
 static int fat_ch = -1, fat_dr;
 
 static int find_first_drive(void)
@@ -65,6 +64,7 @@ static int read_sector(unsigned lba, unsigned char *dst)
 
 int fat_mount(void)
 {
+    unsigned char buf[512];
     int first = find_first_drive();
     if (first < 0) {
         serial_write_string("[fat] no drive\n");
@@ -103,6 +103,7 @@ int fat_mount(void)
 
 static int find_entry(const char *name83, unsigned *out_off, unsigned *out_cluster, unsigned *out_size)
 {
+    unsigned char buf[512];
     unsigned sec;
     for (sec = 0; sec < root_sectors; sec++) {
         if (read_sector(root_start + sec, buf) != 0) return -1;
@@ -128,6 +129,7 @@ static int find_entry(const char *name83, unsigned *out_off, unsigned *out_clust
 
 static unsigned next_cluster(unsigned cluster)
 {
+    unsigned char buf[512];
     unsigned fat_lba = reserved_sectors;
     unsigned fat_off = cluster * 2;
     unsigned fat_sec = fat_lba + fat_off / bytes_per_sector;
@@ -138,6 +140,7 @@ static unsigned next_cluster(unsigned cluster)
 int fat_list(void)
 {
     if (!mounted) return -1;
+    unsigned char buf[512];
     unsigned sec;
     int count = 0;
     for (sec = 0; sec < root_sectors; sec++) {
@@ -184,6 +187,7 @@ int fat_list(void)
 int fat_read(const char *name, void *out, unsigned max)
 {
     if (!mounted) return -1;
+    unsigned char buf[512];
     char name83[12];
     to_83(name, name83);
 
@@ -219,6 +223,7 @@ static int write_sector_raw(unsigned lba, const unsigned char *src)
 int fat_write(const char *name, const void *data, unsigned size)
 {
     if (!mounted) return -1;
+    unsigned char buf[512];
     char name83[12];
     to_83(name, name83);
 
@@ -364,8 +369,6 @@ int fat_write(const char *name, const void *data, unsigned size)
     buf[off + 0x19] = 0;
     buf[off + 0x1A] = first_cluster & 0xFF;
     buf[off + 0x1B] = (first_cluster >> 8) & 0xFF;
-    buf[off + 0x1C] = 0;
-    buf[off + 0x1D] = 0;
     buf[off + 0x1C] = size & 0xFF;
     buf[off + 0x1D] = (size >> 8) & 0xFF;
     buf[off + 0x1E] = (size >> 16) & 0xFF;
@@ -376,6 +379,7 @@ int fat_write(const char *name, const void *data, unsigned size)
 int fat_delete(const char *name)
 {
     if (!mounted) return -1;
+    unsigned char buf[512];
     char name83[12];
     to_83(name, name83);
 
