@@ -33,3 +33,6 @@ bochsout.txt
 
 # Logs
 *.log
+
+# User-specific
+command.txt

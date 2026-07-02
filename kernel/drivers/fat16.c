@@ -292,8 +292,8 @@ int fat_write(const char *name, const void *data, unsigned size)
             unsigned val = buf[pos] | (buf[pos + 1] << 8);
             if (val == 0) {
                 if (allocated == clusters_needed - 1) {
-                    buf[pos] = 0xFF;
-                    buf[pos + 1] = 0xFF;
+                    buf[pos] = FAT16_EOC & 0xFF;
+                    buf[pos + 1] = (FAT16_EOC >> 8) & 0xFF;
                 } else {
                     buf[pos] = 0x00;
                     buf[pos + 1] = 0x00;
@@ -302,8 +302,8 @@ int fat_write(const char *name, const void *data, unsigned size)
                 // Mirror FAT2
                 unsigned fat2_sec = fat_sec + sectors_per_fat;
                 if (read_sector(fat2_sec, buf) != 0) return -1;
-                buf[pos] = (allocated == clusters_needed - 1) ? 0xFF : 0x00;
-                buf[pos + 1] = (allocated == clusters_needed - 1) ? 0xFF : 0x00;
+                buf[pos] = (allocated == clusters_needed - 1) ? (FAT16_EOC & 0xFF) : 0x00;
+                buf[pos + 1] = (allocated == clusters_needed - 1) ? ((FAT16_EOC >> 8) & 0xFF) : 0x00;
                 if (write_sector_raw(fat2_sec, buf) != 0) return -1;
 
                 if (first_cluster == 0) first_cluster = cl;

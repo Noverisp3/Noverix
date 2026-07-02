@@ -91,7 +91,6 @@ void free(void *ptr)
         unsigned int prev_addr = addr - prev_size;
         unsigned int *prev_hdr = (unsigned int *)prev_addr;
         if (!(*prev_hdr & 1)) {
-            prev_addr = (unsigned int)prev_hdr;
             size += prev_size;
             *prev_hdr = size;
             set_footer(prev_addr, size);

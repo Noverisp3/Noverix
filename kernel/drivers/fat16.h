@@ -1,6 +1,8 @@
 #ifndef FAT16_H
 #define FAT16_H
 
+#define FAT16_EOC 0xFFFF
+
 int fat_mount(void);
 int fat_list(void);
 int fat_read(const char *name, void *buf, unsigned max);

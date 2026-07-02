@@ -208,6 +208,7 @@ Project_002_OS/
   - `free(ptr)`: Mark free → merge với next block (nếu free) → merge với prev block qua boundary tag footer | [set_footer]
   - `set_footer(addr, size)`: Ghi size vào cuối block (dùng cho boundary tag) | []
 - **Import:** `serial.h`
+- **Bug fix:** Loại bỏ dòng `prev_addr = (unsigned int)prev_hdr;` trong backward merge (`free()`). Dòng này gán `prev_addr` bằng địa chỉ con trỏ local trên stack thay vì địa chỉ block heap, gây sai footer và heap corruption.
 
 ---
 
@@ -225,10 +226,10 @@ Project_002_OS/
 - **Import:** `ports.h`, `serial.h`
 
 ---
-
 ### `kernel/drivers/fat16.c` + `fat16.h`
 
 - **Vai trò:** FAT16 filesystem driver — BPB parsing, root dir, cluster chain, file CRUD.
+- **Hằng số:** `FAT16_EOC=0xFFFF` (End Of Chain marker)
 - **Static data:** BPB fields, `fat_ch`, `fat_dr` (`buf[512]` là local stack variable trong mỗi hàm để tránh race condition)
 - **Hàm:**
   - `find_first_drive(void)`: Tìm ATA device đầu tiên (ch 0..1, dr 0..1) | [ata_drive_exists]
@@ -243,6 +244,7 @@ Project_002_OS/
   - `fat_write(name, data, size)`: Xóa cluster cũ nếu tồn tại → tìm free dir entry → allocate cluster chain (FAT1 + FAT2 mirror) → write data → update dir entry | [find_entry, read_sector, write_sector_raw, next_cluster]
   - `fat_delete(name)`: Tìm entry → free cluster chain (FAT1 + FAT2) → mark dir entry 0xE5 | [find_entry, read_sector, write_sector_raw, next_cluster]
 - **Import:** `ata.h`, `screen.h`, `ports.h`, `serial.h`
+- **Cải tiến:** Thay hardcoded `0xFF`/`0xFF` cho EOC cluster bằng hằng số `FAT16_EOC`. Giúp code dễ bảo trì và dễ mở rộng sang FAT12/FAT32.
 
 ---
 
