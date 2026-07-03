@@ -192,13 +192,14 @@ pm_trampoline:
     mov esp, 0x90000
 
     ; Copy kernel from KERNEL_LOAD_ADDR (0x9000) to KERNEL_OFFSET (0x2000)
-    ; Use backwards copy to avoid overwriting when destination overlaps
-    mov esi, KERNEL_LOAD_ADDR + KERNEL_SECTORS * 512 - 4
-    mov edi, KERNEL_OFFSET + KERNEL_SECTORS * 512 - 4
+    ; Use forward copy because dest (0x2000) < src (0x9000).
+    ; Forward is safe even with overlap: dest = src - 0x7000, so src is always
+    ; read before dest overwrites it.
+    mov esi, KERNEL_LOAD_ADDR
+    mov edi, KERNEL_OFFSET
     mov ecx, KERNEL_SECTORS * 128      ; 512 bytes / 4 = 128 dwords per sector
-    std
-    rep movsd
     cld
+    rep movsd
 
     ; Jump into kernel
     mov eax, KERNEL_OFFSET

@@ -43,12 +43,15 @@ static const char scancode_ascii_shift[TABLE_SIZE] = {
     'M', '<', '>', '?', 0, '*', 0, ' '
 };
 
+static int kb_debug_cnt;
+
 static void keyboard_handler(registers_t *regs)
 {
     (void)regs;
     unsigned char status = inb(KEYBOARD_STATUS_PORT);
     if (!(status & 0x01)) return;
     scan_code = inb(KEYBOARD_DATA_PORT);
+
     if (scan_code == EXTENDED_PREFIX) {
         extended = 1;
         return;

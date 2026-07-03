@@ -18,7 +18,7 @@ KERNEL_OBJS = \
 	$(BUILD_DIR)/keyboard.o \
 	$(BUILD_DIR)/serial.o \
 	$(BUILD_DIR)/ata.o \
-	$(BUILD_DIR)/fat16.o \
+	$(BUILD_DIR)/nvfs.o \
 	$(BUILD_DIR)/gdt.o \
 	$(BUILD_DIR)/idt.o \
 	$(BUILD_DIR)/interrupt.o \
@@ -59,10 +59,13 @@ $(BUILD_DIR)/os-image.bin: $(BUILD_DIR)/bootloader.bin $(BUILD_DIR)/kernel.bin |
 	truncate -s 1474560 $@
 
 clean:
-	rm -rf $(BUILD_DIR)
+	rm -rf $(BUILD_DIR) nvfs_disk.img
 
-run-qemu: $(BUILD_DIR)/os-image.bin
-	qemu-system-x86_64 -boot order=a -drive format=raw,file=$<,if=floppy -drive file=disk.img,format=raw,if=none,id=ata0 -device ide-hd,drive=ata0 -m 32
+nvfs_disk.img: tools/mknvfs.py
+	python3 tools/mknvfs.py $@
+
+run-qemu: $(BUILD_DIR)/os-image.bin nvfs_disk.img
+	qemu-system-x86_64 -boot order=a -drive format=raw,file=$<,if=floppy -drive file=nvfs_disk.img,format=raw,if=none,id=ata0 -device ide-hd,drive=ata0 -m 32
 
 run: $(BUILD_DIR)/os-image.bin
 	bochs -q -f bochsrc.bxrc

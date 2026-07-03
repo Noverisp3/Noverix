@@ -2,7 +2,8 @@
 #include "drivers/keyboard.h"
 #include "drivers/serial.h"
 #include "drivers/ata.h"
-#include "drivers/fat16.h"
+#include "cpu/ports.h"
+#include "drivers/nvfs.h"
 #include "cpu/gdt.h"
 #include "cpu/idt.h"
 #include "cpu/timer.h"
@@ -14,7 +15,7 @@
 #define debug_log(msg) serial_write_string("[kernel] "); serial_write_string(msg); serial_write_char('\n')
 
 #define LINE_BUF 256
-#define PROMPT "Noveris$ "
+#define PROMPT_LEN 256
 #define HISTORY_SIZE 16
 
 static char history[HISTORY_SIZE][LINE_BUF];
@@ -65,6 +66,19 @@ static void history_add(const char *buf)
     strcpy(history[0], buf);
 }
 
+static char read_char_any(void)
+{
+    while (1) {
+        char c = get_char();
+        if (c) return c;
+        if (serial_data_available()) {
+            c = serial_read_char();
+            if (c == '\r') c = '\n';
+            return c;
+        }
+    }
+}
+
 static void readline(char *buf, int max)
 {
     int len = 0, pos = 0;
@@ -73,7 +87,7 @@ static void readline(char *buf, int max)
     int hist_pos = -1;
     char saved[LINE_BUF];
     while (len < max - 1) {
-        char c = read_char();
+        char c = read_char_any();
         if (pos > len) pos = len;
         if (c == KEY_UP && history_count > 0) {
             if (hist_pos == -1) {
@@ -162,7 +176,10 @@ static void handle_cmd(const char *buf)
         print_string("clear    Clear screen\n");
         print_string("echo     Print text or write file (echo text > file)\n");
         print_string("cat      Display file contents\n");
-        print_string("ls       List files\n");
+        print_string("ls       List files (ls, ls <dir>)\n");
+        print_string("cd       Change directory\n");
+        print_string("mkdir    Create directory\n");
+        print_string("rmdir    Remove empty directory\n");
         print_string("rm       Delete file\n");
         print_string("hex      Print a number in hex\n");
         print_string("ver      Show version\n");
@@ -180,7 +197,7 @@ static void handle_cmd(const char *buf)
             char *fname = redir + 1;
             while (*fname == ' ') fname++;
             if (fname[0]) {
-                if (fat_write(fname, content, strlen(content)) == 0)
+                if (nvfs_write(fname, content, strlen(content)) == 0)
                     print_string("OK\n");
                 else
                     print_string("FAIL\n");
@@ -237,7 +254,7 @@ static void handle_cmd(const char *buf)
     } else if (strcmp(cmd, "cat") == 0) {
         if (arg[0]) {
             char tmp[512];
-            int n = fat_read(arg, tmp, 511);
+            int n = nvfs_read(arg, tmp, 511);
             if (n > 0) {
                 tmp[n] = 0;
                 print_string(tmp);
@@ -251,10 +268,27 @@ static void handle_cmd(const char *buf)
             print_string("Usage: cat <file>\n");
         }
     } else if (strcmp(cmd, "ls") == 0) {
-        fat_list();
+        nvfs_list(arg[0] ? arg : "");
+    } else if (strcmp(cmd, "cd") == 0) {
+        if (nvfs_chdir(arg[0] ? arg : "", 0) != 0)
+            print_string("Not found\n");
+    } else if (strcmp(cmd, "mkdir") == 0) {
+        if (arg[0]) {
+            if (nvfs_mkdir(arg) == 0) print_string("OK\n");
+            else print_string("FAIL\n");
+        } else {
+            print_string("Usage: mkdir <path>\n");
+        }
+    } else if (strcmp(cmd, "rmdir") == 0) {
+        if (arg[0]) {
+            if (nvfs_rmdir(arg) == 0) print_string("OK\n");
+            else print_string("FAIL\n");
+        } else {
+            print_string("Usage: rmdir <path>\n");
+        }
     } else if (strcmp(cmd, "rm") == 0) {
         if (arg[0]) {
-            if (fat_delete(arg) == 0) print_string("OK\n");
+            if (nvfs_delete(arg) == 0) print_string("OK\n");
             else print_string("FAIL\n");
         } else {
             print_string("Usage: rm <file>\n");
@@ -360,10 +394,10 @@ void kernel_main(void)
     }
 
     ata_init();
-    if (fat_mount() == 0) {
-        debug_log("FAT16 mounted");
+    if (nvfs_mount() == 0) {
+        debug_log("NVFS mounted");
     } else {
-        debug_log("FAT16 mount failed");
+        debug_log("NVFS mount failed");
     }
 
     debug_log("kernel_main started");
@@ -375,7 +409,15 @@ void kernel_main(void)
 
     while (1) {
         char buf[LINE_BUF];
-        print_string(PROMPT);
+        char prompt[PROMPT_LEN];
+        if (nvfs_path_string(nvfs_get_cwd(), prompt, PROMPT_LEN) == 0) {
+            int p = 0;
+            while (prompt[p]) p++;
+            prompt[p] = '$'; prompt[p+1] = ' '; prompt[p+2] = 0;
+        } else {
+            prompt[0] = '$'; prompt[1] = ' '; prompt[2] = 0;
+        }
+        print_string(prompt);
         readline(buf, LINE_BUF);
         debug_log("cmd: "); serial_write_string(buf); serial_write_char('\n');
         handle_cmd(buf);

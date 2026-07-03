@@ -47,3 +47,14 @@ void serial_write_hex(unsigned int num)
     hex[10] = '\0';
     serial_write_string(hex);
 }
+
+int serial_data_available(void)
+{
+    return inb(COM1 + 5) & 1;
+}
+
+char serial_read_char(void)
+{
+    while (!serial_data_available());
+    return inb(COM1);
+}

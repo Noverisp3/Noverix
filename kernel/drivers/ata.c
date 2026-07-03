@@ -7,6 +7,7 @@
 
 static int ata_exists[2][2];
 static char ata_model[2][2][41];
+static volatile char ata_padding[4096];
 
 int ata_init(void)
 {
@@ -62,6 +63,8 @@ int ata_init(void)
 
         }
     }
+    /* Touch padding to prevent optimization */
+    for (int i = 0; i < 256; i++) ata_padding[i * 16] = 0;
     return detected;
 }
 

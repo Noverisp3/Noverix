@@ -1,4 +1,5 @@
 #include "screen.h"
+#include "serial.h"
 #include "../cpu/ports.h"
 
 #define VIDEO_MEMORY 0xB8000
@@ -77,6 +78,7 @@ void print_char(char c)
 
 void print_string(const char *str)
 {
+    serial_write_string(str);
     while (*str)
         print_char(*str++);
 }

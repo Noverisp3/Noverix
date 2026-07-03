@@ -6,8 +6,8 @@
 
 ```
 BIOS
- └─ boot/bootloader.asm (real-mode INT 0x13 load kernel → 0x0600)
-    └─ PM trampoline (copy 0x0600 → 0x2000)
+ └─ boot/bootloader.asm (real-mode INT 0x13 load kernel → 0x9000)
+    └─ PM trampoline (forward copy 0x9000 → 0x2000)
        └─ kernel/entry.S (BSS zeroing)
           └─ kernel/kernel.c::kernel_main (C entry)
              ├─ kernel/cpu/gdt.c       → GDT reload
@@ -19,11 +19,13 @@ BIOS
              ├─ kernel/memory/paging.c → identity map 32MB, enable CR0.PG
              ├─ kernel/memory/heap.c   → malloc/free allocator
              ├─ kernel/drivers/ata.c   → ATA probe
-             ├─ kernel/drivers/fat16.c → mount FAT16 from ATA LBA
+             ├─ kernel/drivers/nvfs.c  → mount NVFS from ATA LBA
              └─ while(1): readline → handle_cmd → dispatch
 ```
 
-**Luồng dữ liệu disk:** ATA PIO LBA28 → raw sector buffer → FAT16 BPB parsing → root dir / FAT chain → file data. Ghi: memory buffer → cluster allocation → FAT update (2 copies) → data write → dir entry update.
+**Luồng dữ liệu disk:** ATA PIO LBA28 → raw sector buffer → NVFS superblock parse → bitmap/inode management → extent-based data read/write. Ghi: memory buffer → extent alloc → inode update → data write → bitmap update.
+
+**Luồng shell input:** PS/2 keyboard IRQ1 (ring buffer) + COM1 serial poll (non-blocking) → `read_char_any()` → `readline()` → line buffer → `handle_cmd()` → dispatch.
 
 ## 2. SƠ ĐỒ CẤU TRÚC THƯ MỤC
 
@@ -33,7 +35,7 @@ Project_002_OS/
 │   └── bootloader.asm        # MBR: real-mode → A20 → GDT → PM trampoline
 ├── kernel/
 │   ├── entry.S               # Entry: BSS zero → jmp kernel_main
-│   ├── kernel.c              # Shell: readline, history, cmd dispatch
+│   ├── kernel.c              # Shell: readline, history, cmd dispatch, serial input
 │   ├── cpu/
 │   │   ├── gdt.c / gdt.h     # GDT (null,code,data,user_code,user_data)
 │   │   ├── idt.c / idt.h     # IDT (32 ISR + 16 IRQ), register dump
@@ -46,13 +48,16 @@ Project_002_OS/
 │   │   ├── heap.c / heap.h   # Heap allocator (malloc/free, boundary tags)
 │   └── drivers/
 │       ├── ata.c / ata.h     # ATA PIO: probe, LBA28 read/write
-│       ├── fat16.c / fat16.h # FAT16: mount, list, read, write, delete
+│       ├── nvfs.c / nvfs.h   # NVFS: extent-based filesystem driver
 │       ├── keyboard.c / .h   # PS/2 IRQ1: scancode→ASCII, ring buf
 │       ├── screen.c / .h     # VGA 80×25: print, scroll, cursor
-│       └── serial.c / .h    # COM1: init, putchar, puts, puthex
+│       └── serial.c / .h    # COM1: init, putchar, puts, puthex, data_available, read_char
+├── tools/
+│   └── mknvfs.py             # NVFS disk formatter (16MB, 32768 sectors)
 ├── linker.ld                 # ELF linker: 0x2000, PHDRS RX/RW
-├── Makefile                  # clang + nasm + ld.bfd + objcopy
-├── disk.img                  # 16MB FAT16 raw image
+├── Makefile                  # clang + nasm + ld.bfd + objcopy + python
+├── nvfs_disk.img             # 16MB NVFS raw image
+├── README.md
 └── currentfeatures.md
 ```
 
@@ -68,8 +73,9 @@ Project_002_OS/
   - `disk_load`: INT 0x13 CHS đọc kernel từ floppy vào 0x9000 | [BIOS]
   - `enable_a20`: port 0x92 + keyboard controller 0x64/0x60 + INT 0x15 | [I/O ports]
   - `switch_to_pm`: GDT load → A20 → CR0 bit 0 → far jump 0x0500 | [gdt descriptor inline]
-  - `pm_trampoline` (32-bit): reload segments, ESP=0x90000, backwards rep movsd 0x9000→0x2000, call 0x2000 | []
+  - `pm_trampoline` (32-bit): reload segments, ESP=0x90000, forward rep movsd 0x9000→0x2000, call 0x2000 | []
 - **Import:** Constants `KERNEL_OFFSET=0x2000`, `KERNEL_LOAD_ADDR=0x9000`, `PM_TRAMPOLINE_ADDR=0x0500`
+- **Ghi chú:** Forward copy (`cld` `rep movsd`) an toàn vì dest (0x2000) < src (0x9000) — source luôn được đọc trước khi dest ghi đè, kể cả khi có overlap (kernel >56 sectors). Backward copy (`std`) cũ được thay thế vì corrupt source khi dest overlap source.
 
 ---
 
@@ -92,10 +98,13 @@ Project_002_OS/
   - `reboot()`: Gửi 0xFE đến port 0x64 | [inb, outb]
   - `shutdown()`: Ghi 0x2000 vào port 0xB004 + 0x604 | [outw]
   - `history_add(buf)`: Thêm lệnh vào lịch sử (mảng 16 phần tử) | [strcpy, strcmp]
-  - `readline(buf, max)`: Đọc input từ keyboard, inline editing (LEFT/RIGHT di chuyển, insert/delete giữa dòng), UP/DOWN history | [read_char, print_string, history_add]
-  - `handle_cmd(buf)`: Parse cmd/arg, dispatch | [strcmp, print_string, clear_screen, print_hex, sleep_ms, ata_drive_exists, ata_get_model, fat_read, fat_list, fat_write, fat_delete, reboot, shutdown]
-  - `kernel_main(void)`: Init sequence → shell loop | [init_serial, init_gdt, init_idt, init_screen, init_keyboard, init_timer, pfa_init, init_paging, heap_init, ata_init, fat_mount]
-- **Import:** `screen.h`, `keyboard.h`, `serial.h`, `ata.h`, `fat16.h`, `gdt.h`, `idt.h`, `timer.h`, `ports.h`
+  - `readline(buf, max)`: Đọc input từ keyboard + serial (qua `read_char_any`), inline editing (LEFT/RIGHT di chuyển, insert/delete giữa dòng), UP/DOWN history | [read_char_any, print_string, history_add]
+  - `read_char_any(void)`: Đọc ký tự từ keyboard (get_char) hoặc serial (serial_read_char) — non-blocking | [get_char, serial_data_available, serial_read_char]
+  - `handle_cmd(buf)`: Parse cmd/arg, dispatch | [strcmp, print_string, clear_screen, print_hex, sleep_ms, nvfs_list, nvfs_chdir, nvfs_read, nvfs_write, nvfs_delete, nvfs_mkdir, nvfs_rmdir, reboot, shutdown]
+  - `kernel_main(void)`: Init sequence → shell loop | [init_serial, init_gdt, init_idt, init_screen, init_keyboard, init_timer, pfa_init, init_paging, heap_init, ata_init, nvfs_mount]
+- **Import:** `screen.h`, `keyboard.h`, `serial.h`, `ata.h`, `nvfs.h`, `gdt.h`, `idt.h`, `timer.h`, `ports.h`
+- **Lệnh shell mới so với phiên bản FAT16:** `mkdir`, `rmdir`, `cd` (với path, `..`, `./..`, `/`). Prompt động hiển thị path hiện tại (vd `/MYDIR$`).
+- **Serial input:** `readline` poll cả keyboard (IRQ1 ring buffer) và COM1 serial (poll non-blocking). Cho phép pipe lệnh qua `-serial stdio`.
 
 ---
 
@@ -215,7 +224,7 @@ Project_002_OS/
 ### `kernel/drivers/ata.c` + `ata.h`
 
 - **Vai trò:** ATA PIO driver — probe primary/secondary master/slave, LBA28 read/write.
-- **Static data:** `ata_exists[2][2]`, `ata_model[2][2][41]`
+- **Static data:** `ata_exists[2][2]`, `ata_model[2][2][41]`, `ata_padding[4096]` (BSS overflow workaround)
 - **Hàm:**
   - `ata_init(void)`: Probe toàn bộ 4 device (ch=0..1, dr=0..1): outb device select → outb IDENTIFY (0xEC) → poll BSY→ data → extract model string | [inb, outb, inw]
   - `ata_drive_exists(ch, dr)`: Kiểm tra `ata_exists[ch][dr]` | []
@@ -224,27 +233,57 @@ Project_002_OS/
   - `ata_read_sectors(ch, dr, lba, count, buffer)`: Gọi `ata_pio(write=0)` | [ata_pio]
   - `ata_write_sectors(ch, dr, lba, count, buffer)`: Gọi `ata_pio(write=1)` | [ata_pio]
 - **Import:** `ports.h`, `serial.h`
+- **BSS workaround:** `ata_model[2][2][41]` nằm liền kề với `sb_bitmap_start` (NVFS BSS variable). Khi ATA IDENTIFY ghi model string >40 byte, tràn vào NVFS state → zero `sb_bitmap_start` → command FAIL. Thêm `ata_padding[4096]` tạo buffer zone 4KB ngăn overflow.
 
 ---
-### `kernel/drivers/fat16.c` + `fat16.h`
 
-- **Vai trò:** FAT16 filesystem driver — BPB parsing, root dir, cluster chain, file CRUD.
-- **Hằng số:** `FAT16_EOC=0xFFFF` (End Of Chain marker)
-- **Static data:** BPB fields, `fat_ch`, `fat_dr` (`buf[512]` là local stack variable trong mỗi hàm để tránh race condition)
-- **Hàm:**
-  - `find_first_drive(void)`: Tìm ATA device đầu tiên (ch 0..1, dr 0..1) | [ata_drive_exists]
-  - `to_83(name, out)`: Chuyển "file.txt" → "FILE    TXT" | []
-  - `read_sector(lba, dst)`: Đọc 1 sector từ ATA | [ata_read_sectors]
-  - `write_sector_raw(lba, src)`: Ghi 1 sector | [ata_write_sectors]
-  - `fat_mount(void)`: Đọc BPB sector 0 → parse bytes_per_sector, spc, reserved, fats, root_entries, spf → tính root_start, data_start | [read_sector]
-  - `find_entry(name83, *out_off, *out_cluster, *out_size)`: Scan root dir → match 11-byte name → trả sector index + offset + cluster + size | [read_sector]
-  - `next_cluster(cluster)`: Đọc FAT entry 16-bit | [read_sector]
-  - `fat_list(void)`: Scan root dir → in tên + size + dir flag | [read_sector, print_string, print_hex]
-  - `fat_read(name, out, max)`: Tra cứu → walk cluster chain → copy data | [find_entry, read_sector, next_cluster]
-  - `fat_write(name, data, size)`: Xóa cluster cũ nếu tồn tại → tìm free dir entry → allocate cluster chain (FAT1 + FAT2 mirror) → write data → update dir entry | [find_entry, read_sector, write_sector_raw, next_cluster]
-  - `fat_delete(name)`: Tìm entry → free cluster chain (FAT1 + FAT2) → mark dir entry 0xE5 | [find_entry, read_sector, write_sector_raw, next_cluster]
-- **Import:** `ata.h`, `screen.h`, `ports.h`, `serial.h`
-- **Cải tiến:** Thay hardcoded `0xFF`/`0xFF` cho EOC cluster bằng hằng số `FAT16_EOC`. Giúp code dễ bảo trì và dễ mở rộng sang FAT12/FAT32.
+### `kernel/drivers/nvfs.c` + `nvfs.h`
+
+- **Vai trò:** NVFS (Noveris File System) — extent-based filesystem driver thay thế FAT16.
+- **Hằng số:** `NVFS_MAGIC="NVFS"`, `NVFS_SECTOR_SIZE=512`, `NVFS_INODE_SIZE=128`, `NVFS_DIRENT_SIZE=32`, `NVFS_MAX_EXTENTS=14`, `NVFS_MAX_NAME=27`, `NVFS_ROOT_INODE=0`
+- **Kiểu dữ liệu:**
+  - `nvfs_extent`: {start (uint), count (uint)} — một extent liên tục
+  - `nvfs_inode`: {size (uint), type (byte), reserved[3], extent_count (uint), extents[14], padding[4]}
+    - type: `NVFS_TYPE_FILE=1`, `NVFS_TYPE_DIR=2`
+  - `nvfs_dirent`: {name[28], inode (uint)} — directory entry
+- **Static data:** `mounted`, `nvfs_ch`, `nvfs_dr`, `nvfs_cwd`, `sb_*` (superblock fields)
+- **Định dạng disk:**
+  - Superblock (sector 1): magic "NVFS" + all uint fields + state byte + padding
+  - Block bitmap (sectors 2-9): 4096 bytes = 32768 bits cho data blocks
+  - Inode table (sectors 10-41): 128 inodes × 128 bytes = 32 sectors
+  - Data blocks (sectors 42-32767): 32726 blocks × 512 bytes = ~16MB
+- **Hàm nội bộ (static):**
+  - `find_drive(void)`: Tìm ATA device đầu tiên | [ata_drive_exists]
+  - `read_sector(lba, buf)`: Đọc 1 sector từ ATA | [ata_read_sectors]
+  - `write_sector(lba, buf)`: Ghi 1 sector | [ata_write_sectors]
+  - `read_block(block, buf)` / `write_block(block, buf)`: Ánh xạ block number → LBA (data_start + block) | [read_sector, write_sector]
+  - `bitmap_test(block)`, `bitmap_set(block)`, `bitmap_clear(block)`: Quản lý block bitmap | [read_sector, write_sector]
+  - `bitmap_alloc(void)`: Scan bitmap → first free block (first-fit) | [bitmap_test, bitmap_set]
+  - `inode_read(inum, inode)` / `inode_write(inum, inode)` / `inode_alloc(type)`: Quản lý inode | [read_sector, write_sector, bitmap_alloc]
+  - `inode_free(inum)`: Free inode + bitmap của extents | [inode_read, inode_write, bitmap_clear]
+  - `extent_read(inode, buf, max)`: Đọc nội dung file từ extents | [read_block]
+  - `extent_write(inode, data, size)`: Ghi nội dung file — alloc từng extent cho mỗi lần ghi (tối đa 14 extents) | [write_block, bitmap_alloc]
+  - `dir_find(parent_inum, name)`: Tìm entry trong directory | [inode_read, read_block]
+  - `dir_add(parent_inum, name, child_inum)`: Thêm entry vào directory (extent mới nếu cần) | [inode_read, inode_write, read_block, write_block, bitmap_alloc]
+  - `dir_remove(parent_inum, name)`: Xóa entry khỏi directory | [inode_read, inode_write, read_block, write_block]
+  - `dir_empty(dir_inum)`: Kiểm tra directory rỗng | [inode_read, read_block]
+  - `to_upper(s)`: uppercase | []
+  - `resolve_path(path, *parent_inode, name)`: Phân tích path — hỗ trợ `/` (root), `..` (parent), `.` (current) | [dir_find, find_parent]
+  - `find_parent(inum)`: Tìm parent directory bằng scan inodes tìm child_inum | [inode_read, read_block]
+
+- **Hàm public (API):**
+  - `nvfs_mount(void)`: Đọc superblock → set sb_* fields → set nvfs_cwd = root | [find_drive, read_sector]
+  - `nvfs_list(path)`: List directory — `path` optional (cwd nếu rỗng). Hiển thị `[DIR]` tag + `<DIR>` cho directory, size bytes cho file | [resolve_path, inode_read, read_block]
+  - `nvfs_read(path, buf, max)`: Đọc nội dung file | [resolve_path, dir_find, inode_read, extent_read]
+  - `nvfs_write(path, data, size)`: Ghi file — overwrite nếu tồn tại, create nếu chưa có | [resolve_path, dir_find, inode_alloc, extent_write, dir_add, inode_write, extent_free]
+  - `nvfs_delete(path)`: Xóa file — free inode + bitmap, xóa dirent | [resolve_path, dir_find, inode_read, inode_free, dir_remove]
+  - `nvfs_mkdir(path)`: Tạo directory — inode loại DIR | [resolve_path, inode_alloc, dir_add]
+  - `nvfs_rmdir(path)`: Xóa directory rỗng | [resolve_path, dir_find, inode_read, dir_empty, inode_free, dir_remove]
+  - `nvfs_chdir(path, *out_inode)`: Đổi thư mục làm việc — hỗ trợ path rỗng (root), `..`, `.`, `./*` | [resolve_path, dir_find]
+  - `nvfs_get_cwd(void)`: Trả về inode của current directory | []
+  - `nvfs_path_string(inum, buf, size)`: Build path string từ root đến inum (vd `/MYDIR/SUBDIR`) | [find_parent, inode_read, read_block]
+
+- **Import:** `nvfs.h`, `ata.h`, `screen.h`, `serial.h`
 
 ---
 
@@ -271,20 +310,22 @@ Project_002_OS/
   - `set_cursor(x, y)`: port 0x3D4/0x3D5 | [outb]
   - `scroll(void)`: Copy row 1..24 lên row 0..23, clear row 24 | []
   - `print_char(c)`: In 1 char tại cursor, xử lý \n, \b, \t | [scroll, set_cursor]
-  - `print_string(str)`: In chuỗi | [print_char]
+  - `print_string(str)`: In chuỗi ra serial (COM1) trước, sau đó VGA | [serial_write_string, print_char]
   - `print_hex(num)`: In 8-digit hex (0x + 8 nibbles) | [print_string]
   - `print_int(num)`: In số decimal | [print_char]
-- **Import:** `ports.h`
+- **Import:** `ports.h`, `serial.h`
 
 ---
 
 ### `kernel/drivers/serial.c` + `serial.h`
 
-- **Vai trò:** COM1 serial port driver — early boot logging.
+- **Vai trò:** COM1 serial port driver — early boot logging + shell input.
 - **Hàm:**
   - `init_serial(void)`: Cấu hình COM1 (baud rate, 8N1, FIFO, DTR+RTS) | [outb]
   - `is_transmit_empty(void)`: Kiểm tra line status bit 5 | [inb]
   - `serial_write_char(c)`: Chờ TX empty → outb | [is_transmit_empty, outb]
   - `serial_write_string(str)`: While loop | [serial_write_char]
   - `serial_write_hex(num)`: 8-digit hex string (0x + 8 nibbles) | [serial_write_string]
+  - `serial_data_available(void)`: Kiểm tra line status bit 0 (data ready) | [inb]
+  - `serial_read_char(void)`: Đọc 1 byte từ serial (non-blocking) | [inb]
 - **Import:** `ports.h`
