@@ -8,7 +8,7 @@ A minimal x86 hobby operating system built from scratch. Boots from real mode in
 |------|---------|
 | **Boot** | Real-mode → protected-mode transition, A20 gate enable, GDT loading, forward `rep movsd` safe kernel copy. |
 | **Disk I/O** | ATA PIO (LBA28) read/write, dual-channel primary/secondary, IDENTIFY-based drive detection, sector-level access. |
-| **NVFS** | Extent-based filesystem: superblock (sector 1), block bitmap (sectors 2–9), inode table (sectors 10–41, 128 inodes), data blocks (sectors 42–32767). Each inode stores up to 14 extents (start + count) for sequential reads — no cluster chain walking. |
+| **NVFS** | Extent-based filesystem: superblock (sector 1), block bitmap (sectors 2–9), inode table (sectors 10–41, expandable), data blocks (sectors 42–32767). Each inode has 13 direct extents + 1 indirect block pointer (linked extents, up to 64 more extents). Shadow paging for crash-safe writes. Dynamic inode table expansion when full. |
 | **VGA text mode** | 80×25 text buffer, hardware cursor, terminal scrolling, hex/dec rendering. |
 | **PS/2 keyboard** | Interrupt-driven ring buffer, shift/caps, command history with arrow keys. |
 | **Interrupts** | IDT with 32 exception ISRs and 16 IRQs. Full register dump on exception (`ud2` crash command). |
@@ -17,7 +17,7 @@ A minimal x86 hobby operating system built from scratch. Boots from real mode in
 | **Memory** | Page Frame Allocator (bitmap-based, 1 bit per 4KB frame, 8192 frames for 32MB). |
 | **Paging** | 32-bit x86 two-level paging (PD + PT), identity map 0–32MB, `map_page()` for custom mappings, CR0.PG enabled. |
 | **Heap** | `malloc`/`free` allocator at 0x800000 (2MB), boundary-tag first-fit, split/coalesce, serial OOM logging. |
-| **Shell** | Command history (UP/DOWN), inline editing (LEFT/RIGHT/Backspace), path navigation with `cd`, `cd ..`, `cd ./..`, `ls <path>`, `cat`, `echo > file`, `mkdir`, `rmdir`, `rm`. Dynamic prompt shows current directory path (e.g. `/MYDIR$`). |
+| **Shell** | Command history (UP/DOWN), inline editing (LEFT/RIGHT/Backspace), path navigation with `cd`, `cd ..`, `cd ./..`, `ls <path>`, `cat`, `echo > file`, `echo >> file` (append), `mkdir`, `rmdir`, `rm`. Specific error messages (e.g. "Not found", "Directory not empty") instead of generic "FAIL". Dynamic prompt shows current directory path (e.g. `/MYDIR$`). |
 
 ## Requirements
 
@@ -104,7 +104,7 @@ Type 'help' for commands.
 Noverix Shell
 ----------------
 clear    Clear screen
-echo     Print text or write file (echo text > file)
+echo     Print text or write file (echo text > file, echo text >> file for append)
 cat      Display file contents
 ls       List files/directories
 cd       Change directory
@@ -127,6 +127,7 @@ shutdown Power off
 | `help`, `?` | `help` | Show available commands |
 | `echo` | `echo <text>` | Print text to screen |
 | `echo` (write) | `echo text > file` | Write text to a file (creates or overwrites) |
+| `echo` (append) | `echo text >> file` | Append text to an existing file |
 | `cat` | `cat <file>` | Display file contents |
 | `ls` | `ls [path]` | List directory contents — decimal file sizes, `[DIR]` prefix + `<DIR>` for directories |
 | `cd` | `cd [path]` | Change directory. Supports `/` (root), `..`, `./..`, `.` |
@@ -174,7 +175,8 @@ shutdown Power off
 ├── nvfs_disk.img               # 16 MB NVFS disk image
 ├── linker.ld                   # ELF linker script
 ├── Makefile                    # Build system
-└── README.md
+├── README.md
+└── CODEBASE_INDEX.md
 ```
 
 ## Memory map
@@ -225,6 +227,8 @@ _start → kernel_main
 - **Paging** uses identity mapping (virt = phys) for first 32MB. Page directory at dynamically allocated physical frame. `map_page()` supports custom non-identity mappings.
 - **Heap** at 0x800000–0xA00000 (2MB, identity mapped). Boundary tag allocator: each block has a 4-byte header (size + LSB alloc flag) and 4-byte footer for O(1) backward merge. Minimum allocation 12 bytes.
 - **ATA on secondary channel** — QEMU's `-device ide-hd` attaches to channel 1. NVFS driver probes all channels.
-- **NVFS extent-based design** — each inode holds up to 14 extents (start block + block count). Files are read/written in a single sequential pass per extent — no cluster chain walking. This is simpler and faster than FAT.
+- **NVFS extent-based design** — each inode holds 13 direct extents + 1 indirect block pointer (linked extents: up to 64 more extents stored in an indirect sector). Files are read/written in a single sequential pass per extent — no cluster chain walking. Simpler and faster than FAT.
+- **Shadow paging** — writes use the pattern: alloc new blocks → write data → persist inode → free old blocks. If power fails mid-write, old data remains intact. No journaling overhead.
+- **Dynamic inode table** — when the 128 inodes are exhausted, the driver allocates a new block from the bitmap, expands the inode table, and updates the superblock. No more fixed inode limit.
 - **NVFS disk format** — 16 MB (32768 sectors). Bitmap covers data blocks only. Root inode is always 0. Directory entries are 32 bytes (name[28] + inode[4]), 16 per sector.
 - **Serial input** — shell accepts input from both keyboard and COM1 serial port. Use `-serial stdio` for headless operation and scripting.

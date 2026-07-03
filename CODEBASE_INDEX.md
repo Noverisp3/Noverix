@@ -23,7 +23,7 @@ BIOS
              └─ while(1): readline → handle_cmd → dispatch
 ```
 
-**Luồng dữ liệu disk:** ATA PIO LBA28 → raw sector buffer → NVFS superblock parse → bitmap/inode management → extent-based data read/write. Ghi: memory buffer → extent alloc → inode update → data write → bitmap update.
+**Luồng dữ liệu disk:** ATA PIO LBA28 → raw sector buffer → NVFS superblock parse → bitmap/inode management → extent-based data read/write. Ghi (shadow paging): save old extents → alloc new blocks → write data → inode_write (persist) → free old blocks → update bitmap.
 
 **Luồng shell input:** PS/2 keyboard IRQ1 (ring buffer) + COM1 serial poll (non-blocking) → `read_char_any()` → `readline()` → line buffer → `handle_cmd()` → dispatch.
 
@@ -59,6 +59,7 @@ Project_002_OS/
 ├── noverix.img               # Combined disk (boot + kernel + NVFS)
 ├── nvfs_disk.img             # 16MB NVFS raw image
 ├── README.md
+├── CODEBASE_INDEX.md
 └── currentfeatures.md
 ```
 
@@ -241,50 +242,64 @@ Project_002_OS/
 ### `kernel/drivers/nvfs.c` + `nvfs.h`
 
 - **Vai trò:** NVFS (Noverix File System) — extent-based filesystem driver thay thế FAT16.
-- **Hằng số:** `NVFS_MAGIC="NVFS"`, `NVFS_SECTOR_SIZE=512`, `NVFS_INODE_SIZE=128`, `NVFS_DIRENT_SIZE=32`, `NVFS_MAX_EXTENTS=14`, `NVFS_MAX_NAME=27`, `NVFS_ROOT_INODE=0`
+- **Hằng số:** `NVFS_MAGIC="NVFS"`, `NVFS_SECTOR_SIZE=512`, `NVFS_INODE_SIZE=128`, `NVFS_DIRENT_SIZE=32`, `NVFS_MAX_EXTENTS=14` (on-disk struct), `NVFS_DIRECT_EXTENTS=13`, `NVFS_INDIRECT_ENTS=64`, `NVFS_INDIRECT_MARKER=0xFFFFFFFF`, `NVFS_MAX_NAME=27`, `NVFS_ROOT_INODE=0`
+- **Error codes:** `NVFS_ERR_NOT_FOUND=1`, `NVFS_ERR_NOT_DIR=2`, `NVFS_ERR_NOT_FILE=3`, `NVFS_ERR_DIR_BUSY=4`, `NVFS_ERR_NO_SPACE=5`, `NVFS_ERR_NO_INODE=6`, `NVFS_ERR_EXISTS=7`, `NVFS_ERR_IO=8`, `NVFS_ERR_NO_MOUNT=9`, `NVFS_ERR_PATH=10`
+- **Global:** `nvfs_errno` — set by all public API functions on error
 - **Kiểu dữ liệu:**
   - `nvfs_extent`: {start (uint), count (uint)} — một extent liên tục
   - `nvfs_inode`: {size (uint), type (byte), reserved[3], extent_count (uint), extents[14], padding[4]}
     - type: `NVFS_TYPE_FILE=1`, `NVFS_TYPE_DIR=2`
   - `nvfs_dirent`: {name[28], inode (uint)} — directory entry
-- **Static data:** `mounted`, `nvfs_ch`, `nvfs_dr`, `nvfs_cwd`, `sb_*` (superblock fields)
+- **Static data:** `mounted`, `nvfs_ch`, `nvfs_dr`, `nvfs_cwd`, `sb_*` (superblock fields incl. `sb_inode_blocks`)
 - **Định dạng disk:**
-  - Superblock (sector 1): magic "NVFS" + all uint fields + state byte + padding
+  - Superblock (sector 1): magic "NVFS" + all uint fields + `inode_blocks` (offset 36) + state byte + padding
   - Block bitmap (sectors 2-9): 4096 bytes = 32768 bits cho data blocks
-  - Inode table (sectors 10-41): 128 inodes × 128 bytes = 32 sectors
+  - Inode table (sectors 10-41): initial 128 inodes × 128 bytes = 32 sectors, expandable
   - Data blocks (sectors 42-32767): 32726 blocks × 512 bytes = ~16MB
 - **Hàm nội bộ (static):**
   - `find_drive(void)`: Tìm ATA device đầu tiên | [ata_drive_exists]
-  - `read_sector(lba, buf)`: Đọc 1 sector từ ATA | [ata_read_sectors]
-  - `write_sector(lba, buf)`: Ghi 1 sector | [ata_write_sectors]
-  - `read_block(block, buf)` / `write_block(block, buf)`: Ánh xạ block number → LBA (data_start + block) | [read_sector, write_sector]
-  - `bitmap_test(block)`, `bitmap_set(block)`, `bitmap_clear(block)`: Quản lý block bitmap | [read_sector, write_sector]
-  - `bitmap_alloc(void)`: Scan bitmap → first free block (first-fit) | [bitmap_test, bitmap_set]
-  - `inode_read(inum, inode)` / `inode_write(inum, inode)` / `inode_alloc(type)`: Quản lý inode | [read_sector, write_sector, bitmap_alloc]
-  - `inode_free(inum)`: Free inode + bitmap của extents | [inode_read, inode_write, bitmap_clear]
-  - `extent_read(inode, buf, max)`: Đọc nội dung file từ extents | [read_block]
-  - `extent_write(inode, data, size)`: Ghi nội dung file — alloc từng extent cho mỗi lần ghi (tối đa 14 extents) | [write_block, bitmap_alloc]
-  - `dir_find(parent_inum, name)`: Tìm entry trong directory | [inode_read, read_block]
-  - `dir_add(parent_inum, name, child_inum)`: Thêm entry vào directory (extent mới nếu cần) | [inode_read, inode_write, read_block, write_block, bitmap_alloc]
-  - `dir_remove(parent_inum, name)`: Xóa entry khỏi directory | [inode_read, inode_write, read_block, write_block]
+  - `read_sector(lba, buf)` / `write_sector(lba, buf)`: I/O 1 sector | [ata_read_sectors, ata_write_sectors]
+  - `read_block(block, buf)` / `write_block(block, buf)`: Ánh xạ block → LBA (data_start + block) | [read_sector, write_sector]
+  - `bitmap_test(block)`, `bitmap_set(block, used)`, `bitmap_find(count)`: Quản lý block bitmap | [read_sector, write_sector]
+  - `inode_read(inum, inode)` / `inode_write(inum, inode)`: Đọc/ghi inode từ bảng inode | [read_sector, write_sector]
+  - `inode_alloc(type)`: Tìm inode trống — nếu hết, gọi `expand_inode_table()` | [inode_read, inode_write, expand_inode_table]
+  - `inode_free(inum)`: Free inode + toàn bộ block của extents (cả indirect) | [inode_read, inode_write, bitmap_set, extent_load_all]
+  - `expand_inode_table(void)`: Cấp block mới từ bitmap → zero → mở rộng inode table → update superblock | [bitmap_find, bitmap_set, sb_write_field]
+  - `sb_write_field(offset, val)`: Ghi uint vào superblock | [read_sector, write_sector]
+  - `indirect_read_extents(lba, exts, max)`: Đọc extents từ indirect block | [read_block]
+  - `indirect_write_extents(lba, exts, count)`: Ghi extents vào indirect block | [write_block]
+  - `indirect_alloc(void)`: Cấp + zero một indirect block | [bitmap_find, write_block, bitmap_set]
+  - `extent_load_all(inode, out, max)`: Load toàn bộ extents (direct + indirect) vào mảng phẳng | [indirect_read_extents]
+  - `extent_read(inode, buf, max)`: Đọc nội dung file từ extents (qua extent_load_all) | [read_block]
+  - `extent_write(inode, data, size)`: Ghi nội dung file — alloc contiguous blocks, tạo 1 extent | [bitmap_find, write_block, bitmap_set]
+  - `dir_find(parent_inum, name)`: Tìm entry trong directory (qua extent_load_all) | [inode_read, read_block]
+  - `dir_add_extent(inode, block)`: Thêm extent mới cho directory — nếu đủ 13 direct, tạo indirect block | [indirect_alloc, indirect_read_extents, indirect_write_extents]
+  - `dir_add(parent_inum, name, child_inum)`: Thêm entry, tìm slot trống hoặc alloc block + extent | [inode_read, inode_write, read_block, write_block, bitmap_alloc, dir_add_extent]
+  - `dir_remove(parent_inum, name)`: Xóa entry | [inode_read, read_block, write_block]
   - `dir_empty(dir_inum)`: Kiểm tra directory rỗng | [inode_read, read_block]
   - `to_upper(s)`: uppercase | []
-  - `resolve_path(path, *parent_inode, name)`: Phân tích path — hỗ trợ `/` (root), `..` (parent), `.` (current) | [dir_find, find_parent]
-  - `find_parent(inum)`: Tìm parent directory bằng scan inodes tìm child_inum | [inode_read, read_block]
+  - `resolve_path(path, *parent_inode, name)`: Phân tích path — `/`, `..`, `.`, `./..` | [dir_find, find_parent]
+  - `find_parent(inum)`: Scan toàn bộ inode để tìm parent directory | [inode_read, read_block, extent_load_all]
 
 - **Hàm public (API):**
   - `nvfs_mount(void)`: Đọc superblock → set sb_* fields → set nvfs_cwd = root | [find_drive, read_sector]
-  - `nvfs_list(path)`: List directory — `path` optional (cwd nếu rỗng). Hiển thị `[DIR]` tag + `<DIR>` cho directory, size bytes cho file | [resolve_path, inode_read, read_block]
-  - `nvfs_read(path, buf, max)`: Đọc nội dung file | [resolve_path, dir_find, inode_read, extent_read]
-  - `nvfs_write(path, data, size)`: Ghi file — overwrite nếu tồn tại, create nếu chưa có | [resolve_path, dir_find, inode_alloc, extent_write, dir_add, inode_write, extent_free]
-  - `nvfs_delete(path)`: Xóa file — free inode + bitmap, xóa dirent | [resolve_path, dir_find, inode_read, inode_free, dir_remove]
-  - `nvfs_mkdir(path)`: Tạo directory — inode loại DIR | [resolve_path, inode_alloc, dir_add]
+  - `nvfs_list(path)`: List directory — optional path, `[DIR]` tag + `<DIR>` + decimal size | [resolve_path, inode_read, read_block, extent_load_all]
+  - `nvfs_read(path, buf, max)`: Đọc file | [resolve_path, dir_find, inode_read, extent_read]
+  - `nvfs_write(path, data, size)`: Ghi/overwrite file với shadow paging (alloc new → persist inode → free old) | [resolve_path, dir_find, inode_alloc, extent_write, dir_add, inode_write]
+  - `nvfs_delete(path)`: Xóa file | [resolve_path, dir_find, inode_read, inode_free, dir_remove]
+  - `nvfs_mkdir(path)`: Tạo directory | [resolve_path, inode_alloc, dir_add]
   - `nvfs_rmdir(path)`: Xóa directory rỗng | [resolve_path, dir_find, inode_read, dir_empty, inode_free, dir_remove]
-  - `nvfs_chdir(path, *out_inode)`: Đổi thư mục làm việc — hỗ trợ path rỗng (root), `..`, `.`, `./*` | [resolve_path, dir_find]
-  - `nvfs_get_cwd(void)`: Trả về inode của current directory | []
-  - `nvfs_path_string(inum, buf, size)`: Build path string từ root đến inum (vd `/MYDIR/SUBDIR`) | [find_parent, inode_read, read_block]
+  - `nvfs_chdir(path, *out_inode)`: Đổi thư mục | [resolve_path, dir_find]
+  - `nvfs_get_cwd(void)`: Trả về inode cwd | []
+  - `nvfs_path_string(inum, buf, size)`: Build path string (vd `/MYDIR/SUBDIR`) | [find_parent, inode_read, read_block, extent_load_all]
+  - `nvfs_is_mounted(void)`: Kiểm tra mount state | []
+  - `nvfs_append(path, data, size)`: Append vào file với shadow paging | [resolve_path, dir_find, inode_read, extent_read, extent_write, inode_write]
+  - `nvfs_strerror(err)`: Trả về string mô tả lỗi | []
 
 - **Import:** `nvfs.h`, `ata.h`, `screen.h`, `serial.h`
+- **Linked Extents:** Khi `extent_count > NVFS_DIRECT_EXTENTS (13)`, extent[13] trỏ tới indirect block chứa tới 64 extents bổ sung. `extent_load_all()` đọc tất cả vào cache.
+- **Shadow Paging:** Ghi theo thứ tự: alloc block mới → write data → inode_write → free block cũ. Nếu mất điện, dữ liệu cũ nguyên vẹn.
+- **Dynamic Inode Table:** Khi `inode_alloc()` hết inode, gọi `expand_inode_table()` cấp block mới từ bitmap và update superblock.
 
 ---
 
