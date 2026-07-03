@@ -62,8 +62,8 @@ Produces `build/os-image.bin` — a 1.44 MB floppy image and `nvfs_disk.img` —
 ## Run
 
 ```sh
-make run-qemu              # floppy + separate NVFS (default)
-make run-qemu-nrx     # single disk HDD boot
+make run-qemu           # floppy + separate NVFS (default)
+make run-qemu-nrx       # single disk HDD boot
 ```
 
 Or directly:
