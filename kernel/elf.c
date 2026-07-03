@@ -204,6 +204,12 @@ int elf_exec(const char *path)
         return -1;
     }
 
+    if (ehdr->e_phentsize < sizeof(elf32_phdr_t))
+    {
+        print_string("Error: Program header entry size too small\n");
+        return -1;
+    }
+
     unsigned char *ph_table = elf_load_buf + ehdr->e_phoff;
     for (int i = 0; i < ehdr->e_phnum; i++)
     {
@@ -228,11 +234,18 @@ int elf_exec(const char *path)
             serial_write_int(phdr->p_memsz);
             serial_write_string("\n");
 
-            if (phdr->p_vaddr < 0x00100000 || phdr->p_vaddr >= 0x02000000)
+            if (phdr->p_vaddr < 0x00800000 || phdr->p_vaddr >= 0x00A00000)
             {
                 print_string("Error: Invalid ELF load address ");
                 print_hex(phdr->p_vaddr);
                 print_string("\n");
+                return -1;
+            }
+
+            if (phdr->p_vaddr + phdr->p_memsz < phdr->p_vaddr ||
+                phdr->p_vaddr + phdr->p_memsz > 0x00A00000)
+            {
+                print_string("Error: ELF segment extends past heap end\n");
                 return -1;
             }
 
@@ -242,7 +255,9 @@ int elf_exec(const char *path)
                 return -1;
             }
 
-            if (phdr->p_offset + phdr->p_filesz > (unsigned int)size)
+            if (phdr->p_offset > (unsigned int)size ||
+                phdr->p_filesz > (unsigned int)size ||
+                phdr->p_offset + phdr->p_filesz > (unsigned int)size)
             {
                 print_string("Error: Segment data out of file bounds\n");
                 return -1;
