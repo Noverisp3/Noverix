@@ -55,7 +55,7 @@ Produces `build/os-image.bin` — a 1.44 MB floppy image and `nvfs_disk.img` —
 | `make` / `make all` | Build `os-image.bin` + `nvfs_disk.img` |
 | `make clean` | Remove `build/`, images |
 | `make run-qemu` | Floppy + NVFS disk (QEMU) |
-| `make run-qemu-combined` | Single-disk HDD boot with NVFS |
+| `make run-qemu-nrx` | Single-disk HDD boot with NVFS |
 | `make iso` | Build `build/os-image.iso` |
 | `make noverix.img` | Combined disk: `dd` to USB for real boot |
 
@@ -63,7 +63,7 @@ Produces `build/os-image.bin` — a 1.44 MB floppy image and `nvfs_disk.img` —
 
 ```sh
 make run-qemu              # floppy + separate NVFS (default)
-make run-qemu-combined     # single disk HDD boot
+make run-qemu-nrx     # single disk HDD boot
 ```
 
 Or directly:

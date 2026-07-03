@@ -81,7 +81,7 @@ run-qemu-iso: $(BUILD_DIR)/os-image.iso nvfs_disk.img
 	  -drive file=nvfs_disk.img,format=raw,if=none,id=ata0 \
 	  -device ide-hd,drive=ata0 -m 32
 
-run-qemu-noverix: noverix.img
+run-qemu-nrx: noverix.img
 	qemu-system-x86_64 -boot order=c \
 	  -drive file=noverix.img,format=raw,if=none,id=ata0 \
 	  -device ide-hd,drive=ata0 -m 32
