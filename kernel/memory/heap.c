@@ -86,7 +86,7 @@ void free(void *ptr)
         }
     }
 
-    if (addr > HEAP_START) {
+    if (addr > HEAP_START && addr - FOOTER_SIZE >= HEAP_START) {
         unsigned int prev_size = *(unsigned int *)(addr - FOOTER_SIZE);
         unsigned int prev_addr = addr - prev_size;
         unsigned int *prev_hdr = (unsigned int *)prev_addr;

@@ -2,7 +2,7 @@ ASM=nasm
 CC=clang
 LD=ld.bfd
 OBJCOPY=objcopy
-CFLAGS=-ffreestanding -m32 -Wall -Wextra -nostdlib -fno-pie -c
+CFLAGS=-ffreestanding -m32 -Wall -Wextra -Werror -nostdlib -fno-pie -c
 LDFLAGS=-m elf_i386 -T linker.ld -Map kernel.map
 
 BUILD_DIR=build

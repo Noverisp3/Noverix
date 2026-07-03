@@ -40,10 +40,8 @@ void pfa_init(void)
     serial_write_hex(bss_end_addr);
     serial_write_char('\n');
 
-    mark_frame(0x00000000);
-
     unsigned int kernel_end = (bss_end_addr + FRAME_SIZE - 1) & ~(FRAME_SIZE - 1);
-    for (unsigned int a = 0x00001000; a < kernel_end; a += FRAME_SIZE)
+    for (unsigned int a = 0x00000000; a < kernel_end; a += FRAME_SIZE)
         mark_frame(a);
 
     mark_frame(0x00090000);

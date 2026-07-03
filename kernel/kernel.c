@@ -238,7 +238,7 @@ static void execute_cmd(const char *cmd, char *arg)
         unsigned int n = 0;
         int k = 0;
         while (arg[k]) {
-            if (k >= 8 || n > UINT_MAX / 10 || (n == UINT_MAX / 10 && (arg[k] - '0') > UINT_MAX % 10)) {
+            if (k >= 8 || n > UINT_MAX / 10 || (n == UINT_MAX / 10 && (unsigned int)(arg[k] - '0') > UINT_MAX % 10)) {
                 print_string("Invalid number\n");
                 return;
             }
@@ -253,7 +253,7 @@ static void execute_cmd(const char *cmd, char *arg)
         unsigned int n = 0;
         int k = 0;
         while (arg[k]) {
-            if (k >= 7 || n > UINT_MAX / 10 || (n == UINT_MAX / 10 && (arg[k] - '0') > UINT_MAX % 10)) {
+            if (k >= 7 || n > UINT_MAX / 10 || (n == UINT_MAX / 10 && (unsigned int)(arg[k] - '0') > UINT_MAX % 10)) {
                 print_string("Invalid number\n");
                 return;
             }

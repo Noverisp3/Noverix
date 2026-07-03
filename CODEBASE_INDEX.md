@@ -105,10 +105,10 @@ Project_002_OS/
   - `strcmp(a, b)`: Compare | []
   - `reboot()`: Send 0xFE to port 0x64 | [inb, outb]
   - `shutdown()`: Write 0x2000 to port 0xB004 + 0x604 | [outw]
-  - `history_add(buf)`: Add command to history ring (16 entries) | [strcpy, strcmp]
-  - `readline(buf, max)`: Read input from keyboard + serial (via `read_char_any`), inline editing (LEFT/RIGHT move, mid-line insert/delete), UP/DOWN history, Ctrl+C (char 0x03) cancels line and prints ^C | [read_char_any, print_string, history_add]
-  - `read_char_any(void)`: Read char from keyboard (get_char) or serial (serial_read_char) — non-blocking | [get_char, serial_data_available, serial_read_char]
-   - `execute_cmd(cmd, arg)`: Dispatch parsed command (extracted from handle_cmd for pipe reuse) | [strcmp, print_string, clear_screen, print_hex, sleep_ms, nvfs_list, nvfs_chdir, nvfs_read, nvfs_write, nvfs_delete, nvfs_mkdir, nvfs_rmdir, reboot, shutdown]
+   - `history_add(buf)`: Add command to history ring (16 entries), with overflow protection (shifts oldest when full) | [strcpy, strcmp]
+   - `readline(buf, max)`: Read input from keyboard + serial (via `read_char_any`), inline editing (LEFT/RIGHT move, mid-line insert/delete), UP/DOWN history, Ctrl+C (char 0x03) cancels line and prints ^C | [read_char_any, print_string, history_add]
+   - `read_char_any(void)`: Read char from keyboard (get_char) or serial (serial_read_char) — non-blocking | [get_char, serial_data_available, serial_read_char]
+   - `execute_cmd(cmd, arg)`: Dispatch parsed command (extracted from handle_cmd for pipe reuse). Echo redirection has bounds checking on `>` operator. Hex/sleep commands have integer overflow guards | [strcmp, print_string, clear_screen, print_hex, sleep_ms, nvfs_list, nvfs_chdir, nvfs_read, nvfs_write, nvfs_delete, nvfs_mkdir, nvfs_rmdir, reboot, shutdown]
    - `handle_cmd(buf)`: Parse `|` pipe → split left/right → `set_capture(1)` → `execute_cmd(cmd1, arg1)` → `set_capture(0)` → copy captured output to `pipe_data` → `execute_cmd(cmd2, arg2)` | [execute_cmd, set_capture, get_capture]
    - `kernel_main(void)`: Init sequence → shell loop | [init_serial, init_gdt, init_idt, init_screen, init_keyboard, init_timer, pfa_init, init_paging, heap_init, ata_init, nvfs_mount]
 - **Static data:** `history[HISTORY_SIZE][LINE_BUF]`, `pipe_data[4096]`, `has_pipe_data`
@@ -146,7 +146,7 @@ Project_002_OS/
   - `isr_handler(regs)`: Dispatch to handler or `exception_handler` | []
   - `irq_handler(regs)`: Send EOI → handler | [outb]
   - `irq_remap(void)`: PIC master+slave remap (ICW1-ICW4) | [outb]
-  - `register_interrupt_handler(irq, handler)`: CLI → set → STI | []
+   - `register_interrupt_handler(irq, handler)`: Atomic pushf/cli/popf → set handler | []
   - `init_idt(void)`: Set 256 entries → LIDT → irq_remap → STI | [idt_set_entry, irq_remap]
 - **Import:** `ports.h`, `screen.h`, `serial.h`, 32 extern ISR labels + 16 extern IRQ labels (interrupt.S)
 
@@ -194,7 +194,7 @@ Project_002_OS/
 - **Role:** Page Frame Allocator — bitmap-based physical memory manager.
 - **Static data:** `bitmap[1024]` (8192 bits for 32MB, 1 bit per 4KB frame)
 - **Functions:**
-  - `pfa_init(void)`: Mark reserved frames (null page, kernel, stack, legacy 0xA0000-0xFFFFF) | [set_bit, serial_write_string]
+  - `pfa_init(void)`: Mark reserved frames (null page, kernel, stack, legacy 0xA0000-0xFFFFF) via loop starting at 0x00000000 | [set_bit, serial_write_string]
   - `alloc_frame(void)`: Scan bitmap → first 0 bit → set to 1 → return physical address | [test_bit, set_bit]
   - `free_frame(addr)`: Clear corresponding bit | [clear_bit]
   - `set_bit(frame)`: Internal — set bit in bitmap | []
@@ -226,7 +226,7 @@ Project_002_OS/
 - **Functions:**
   - `heap_init(void)`: Create 1 free block covering entire HEAP_SIZE | [set_footer, serial_write_string]
   - `malloc(size)`: Walk blocks → first-fit → split if remainder >= MIN_BLOCK (12) → return ptr after header | [set_footer]
-  - `free(ptr)`: Mark free → merge with next block (if free) → merge with prev block via boundary tag footer | [set_footer]
+  - `free(ptr)`: Mark free → merge with next block (if free) → merge with prev block via boundary tag footer (with bounds guard) | [set_footer]
   - `set_footer(addr, size)`: Write size at block end (for boundary tag) | []
 - **Import:** `serial.h`
 - **Bug fix:** Removed `prev_addr = (unsigned int)prev_hdr;` in backward merge (`free()`). This line assigned `prev_addr` the address of a local stack pointer instead of the heap block address, causing wrong footer and heap corruption.
@@ -334,7 +334,7 @@ Project_002_OS/
 ### `kernel/drivers/screen.c` + `screen.h`
 
 - **Role:** VGA text mode (80×25) + VBE graphics mode (1024×768) dispatch driver. Character output, hex/dec display, scroll, cursor. Capture mode for shell pipe operator.
-- **Static data:** `capture_mode`, `capture_buf[4096]`, `capture_pos`
+- **Static data:** `capture_mode`, `capture_buf[4096]`, `capture_pos` (with bounds protection)
 - **VBE Dispatch:** `clear_screen`, `set_cursor`, `print_char`, `scroll` check `is_graphics_active()` and call the VBE framebuffer versions when active:
   - `clear_screen` → `fill_rect(..., GFX_BG)`
   - `set_cursor` → no-op (hardware cursor unused)
