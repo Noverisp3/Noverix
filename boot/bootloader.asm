@@ -76,17 +76,17 @@ start:
     mov si, msg_loaded
     call print_string
 
-    ; ── VBE init: try 1024x768x32 (mode 0x118) ──
+    ; ── VBE init: try 800x600x24 (mode 0x115) ──
     xor ax, ax
     mov es, ax
     mov ax, 0x4F01
-    mov cx, 0x0118
+    mov cx, 0x0115
     mov di, 0x0600
     int 0x10
     cmp al, 0x4F
     jne .vbe_fail
     mov ax, 0x4F02
-    mov bx, 0x4118
+    mov bx, 0x4115
     int 0x10
     cmp al, 0x4F
     jne .vbe_fail

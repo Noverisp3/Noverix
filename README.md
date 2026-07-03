@@ -10,7 +10,7 @@ A minimal x86 hobby operating system built from scratch. Boots from real mode in
 | **Disk I/O** | ATA PIO (LBA28) read/write, dual-channel primary/secondary, IDENTIFY-based drive detection, sector-level access. |
 | **NVFS** | Extent-based filesystem: superblock (sector 1), block bitmap (sectors 2–9), inode table (sectors 10–41, expandable), data blocks (sectors 42–32767). Each inode has 13 direct extents + 1 indirect block pointer (linked extents, up to 64 more extents). Shadow paging for crash-safe writes. Dynamic inode table expansion when full. File timestamps (ctime/mtime, seconds since boot) stored in inode. |
 | **VGA text mode** | 80×25 text buffer, hardware cursor, terminal scrolling, hex/dec rendering. Fallback when VBE unavailable. |
-| **VBE graphics mode** | 1024×768×24bpp framebuffer (mode 0x118), bitmap font rendering (8×16), pixel-level draw, smooth scrolling. Automatic dispatch in screen driver when active. |
+| **VBE graphics mode** | 800×600×24bpp framebuffer (mode 0x115), bitmap font rendering (8×16), pixel-level draw, smooth scrolling. Automatic dispatch in screen driver when active. |
 | **PS/2 keyboard** | Interrupt-driven ring buffer, shift/caps, command history with arrow keys. |
 | **Interrupts** | IDT with 32 exception ISRs and 16 IRQs. Full register dump on exception (`ud2` crash command). |
 | **Timer (PIT)** | Tick counter via IRQ0, `sleep_ms()` for delays, `get_ticks()` for time source. |
