@@ -17,7 +17,7 @@ A minimal x86 hobby operating system built from scratch. Boots from real mode in
 | **Memory** | Page Frame Allocator (bitmap-based, 1 bit per 4KB frame, 8192 frames for 32MB). |
 | **Paging** | 32-bit x86 two-level paging (PD + PT), identity map 0–32MB, `map_page()` for custom mappings, CR0.PG enabled. |
 | **Heap** | `malloc`/`free` allocator at 0x800000 (2MB), boundary-tag first-fit, split/coalesce, serial OOM logging. |
-| **Shell** | Command history (UP/DOWN), inline editing (LEFT/RIGHT/Backspace), path navigation with `cd`, `cd ..`, `cd ./..`, `ls <path>`, `cat`, `echo > file`, `echo >> file` (append), `mkdir`, `rmdir`, `rm`. Specific error messages (e.g. "Not found", "Directory not empty") instead of generic "FAIL". Dynamic prompt shows current directory path (e.g. `/MYDIR$`). |
+| **Shell** | Command history (UP/DOWN), inline editing (LEFT/RIGHT/Backspace), path navigation with `cd`, `cd ..`, `cd ./..`, `ls <path>`, `cat`, `echo > file`, `echo >> file` (append), `|` pipe (e.g. `cmd1 | cmd2`), `mkdir`, `rmdir`, `rm`. Specific error messages (e.g. "Not found", "Directory not empty") instead of generic "FAIL". Dynamic prompt shows current directory path (e.g. `/MYDIR$`). |
 
 ## Requirements
 
@@ -105,7 +105,7 @@ Noverix Shell
 ----------------
 clear    Clear screen
 echo     Print text or write file (echo text > file, echo text >> file for append)
-cat      Display file contents
+cat      Display file contents (cat reads pipe when no file)
 ls       List files/directories
 cd       Change directory
 mkdir    Create directory
@@ -128,7 +128,8 @@ shutdown Power off
 | `echo` | `echo <text>` | Print text to screen |
 | `echo` (write) | `echo text > file` | Write text to a file (creates or overwrites) |
 | `echo` (append) | `echo text >> file` | Append text to an existing file |
-| `cat` | `cat <file>` | Display file contents |
+| pipe | `cmd1 \| cmd2` | Pipe cmd1 output to cmd2 (cat/echo read pipe when no arg/file) |
+| `cat` | `cat <file>` | Display file contents (no file arg → reads from pipe) |
 | `ls` | `ls [path]` | List directory contents — decimal file sizes, `[DIR]` prefix + `<DIR>` for directories |
 | `cd` | `cd [path]` | Change directory. Supports `/` (root), `..`, `./..`, `.` |
 | `mkdir` | `mkdir <path>` | Create directory |

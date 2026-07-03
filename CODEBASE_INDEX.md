@@ -102,10 +102,13 @@ Project_002_OS/
   - `history_add(buf)`: Add command to history ring (16 entries) | [strcpy, strcmp]
   - `readline(buf, max)`: Read input from keyboard + serial (via `read_char_any`), inline editing (LEFT/RIGHT move, mid-line insert/delete), UP/DOWN history | [read_char_any, print_string, history_add]
   - `read_char_any(void)`: Read char from keyboard (get_char) or serial (serial_read_char) — non-blocking | [get_char, serial_data_available, serial_read_char]
-  - `handle_cmd(buf)`: Parse cmd/arg, dispatch | [strcmp, print_string, clear_screen, print_hex, sleep_ms, nvfs_list, nvfs_chdir, nvfs_read, nvfs_write, nvfs_delete, nvfs_mkdir, nvfs_rmdir, reboot, shutdown]
-  - `kernel_main(void)`: Init sequence → shell loop | [init_serial, init_gdt, init_idt, init_screen, init_keyboard, init_timer, pfa_init, init_paging, heap_init, ata_init, nvfs_mount]
+   - `execute_cmd(cmd, arg)`: Dispatch parsed command (extracted from handle_cmd for pipe reuse) | [strcmp, print_string, clear_screen, print_hex, sleep_ms, nvfs_list, nvfs_chdir, nvfs_read, nvfs_write, nvfs_delete, nvfs_mkdir, nvfs_rmdir, reboot, shutdown]
+   - `handle_cmd(buf)`: Parse `|` pipe → split left/right → `set_capture(1)` → `execute_cmd(cmd1, arg1)` → `set_capture(0)` → copy captured output to `pipe_data` → `execute_cmd(cmd2, arg2)` | [execute_cmd, set_capture, get_capture]
+   - `kernel_main(void)`: Init sequence → shell loop | [init_serial, init_gdt, init_idt, init_screen, init_keyboard, init_timer, pfa_init, init_paging, heap_init, ata_init, nvfs_mount]
+- **Static data:** `history[HISTORY_SIZE][LINE_BUF]`, `pipe_data[4096]`, `has_pipe_data`
 - **Import:** `screen.h`, `keyboard.h`, `serial.h`, `ata.h`, `nvfs.h`, `gdt.h`, `idt.h`, `timer.h`, `ports.h`
-- **New shell features over FAT16 version:** `mkdir`, `rmdir`, `cd` (with path, `..`, `./..`, `/`). Dynamic prompt showing current path (e.g. `/MYDIR$`). `>>` append operator. Specific error messages via `nvfs_strerror(nvfs_errno)`.
+- **New shell features over FAT16 version:** `mkdir`, `rmdir`, `cd` (with path, `..`, `./..`, `/`). Dynamic prompt showing current path (e.g. `/MYDIR$`). `>>` append operator. `|` pipe operator. Specific error messages via `nvfs_strerror(nvfs_errno)`.
+- **Pipe flow:** `set_capture(1)` → print_*/print_string redirect to 4KB capture buffer → `set_capture(0)` → `get_capture()` → copy to `pipe_data` → set `has_pipe_data=1` → execute cmd2 (cat/echo read pipe_data when arg is empty).
 - **Serial input:** `readline` polls both keyboard (IRQ1 ring buffer) and COM1 serial (non-blocking poll). Allows command piping via `-serial stdio`.
 
 ---
@@ -319,16 +322,19 @@ Project_002_OS/
 
 ### `kernel/drivers/screen.c` + `screen.h`
 
-- **Role:** VGA text mode 80×25 driver. Character output, hex/dec display, scroll, cursor.
+- **Role:** VGA text mode 80×25 driver. Character output, hex/dec display, scroll, cursor. Capture mode for shell pipe operator.
+- **Static data:** `capture_mode`, `capture_buf[4096]`, `capture_pos`
 - **Functions:**
   - `clear_screen(void)`: Fill entire VGA memory (0xB8000) with spaces | [set_cursor]
   - `init_screen(void)`: Call clear_screen | [clear_screen]
   - `set_cursor(x, y)`: port 0x3D4/0x3D5 | [outb]
   - `scroll(void)`: Copy rows 1..24 to 0..23, clear row 24 | []
-  - `print_char(c)`: Print 1 char at cursor, handle \n, \b, \t | [scroll, set_cursor]
-  - `print_string(str)`: Print to serial (COM1) first, then VGA | [serial_write_string, print_char]
+  - `print_char(c)`: Print 1 char at cursor, handle \n, \b, \t. In capture mode, stores char to `capture_buf` instead of VGA | [scroll, set_cursor]
+  - `print_string(str)`: Print to serial (COM1) then VGA. Skips serial in capture mode | [serial_write_string, print_char]
   - `print_hex(num)`: Print 8-digit hex (0x + 8 nibbles) | [print_string]
   - `print_int(num)`: Print decimal number | [print_char]
+  - `set_capture(on)`: Enable/disable capture mode, reset `capture_pos` on enable, null-terminate on disable | []
+  - `get_capture(void)`: Null-terminate and return pointer to captured output | []
 - **Import:** `ports.h`, `serial.h`
 
 ---
