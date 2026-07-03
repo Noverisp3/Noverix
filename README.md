@@ -16,10 +16,12 @@ A minimal x86 hobby operating system built from scratch. Boots from real mode in
 | **Timer (PIT)** | Tick counter via IRQ0, `sleep_ms()` for delays, `get_ticks()` for time source. |
 | **Serial I/O** | COM1 serial port — kernel logging, debug output, and shell input via `-serial stdio`. |
 | **Memory** | Page Frame Allocator (bitmap-based, 1 bit per 4KB frame, 8192 frames for 32MB). |
-| **Paging** | 32-bit x86 two-level paging (PD + PT), identity map 0–32MB, `map_page()` for custom mappings, CR0.PG enabled. |
-| **Heap** | `malloc`/`free` allocator at 0x800000 (2MB), boundary-tag first-fit, split/coalesce, serial OOM logging. |
+| **Paging** | 32-bit x86 two-level paging (PD + PT), identity map 0–32MB, `map_page()`/`unmap_page()`/`get_page_mapping()` for custom mappings, CR0.PG enabled. |
+| **Heap** | `malloc`/`free`/`realloc`/`calloc` allocator at 0x800000 (2MB), boundary-tag first-fit, split/coalesce, serial OOM logging, `heap_walk()` debug dump. |
+| **PFA** | Bitmap-based page frame allocator, single-frame + contiguous multi-frame allocation (`alloc_frames`/`free_frames`), `get_free_frame_count()` query. |
+| **Shared library** | `lib.c/h` provides `memcpy`/`memset`/`strlen`/`strcpy`/`strcmp` used across all kernel modules, eliminating code duplication. |
 | **ELF loader** | Loads and executes ELF binaries from NVFS into user-space, basic syscall interface via software interrupt. |
-| **Shell** | Command history (UP/DOWN), inline editing (LEFT/RIGHT/Backspace), Ctrl+C to cancel line, path navigation with `cd`, `cd ..`, `cd ./..`, `ls <path>`, `cat`, `echo > file`, `echo >> file` (append), `|` pipe (e.g. `cmd1 | cmd2`), `exec` for running ELF executables, `mkdir`, `rmdir`, `rm`. Specific error messages (e.g. "Not found", "Directory not empty") instead of generic "FAIL". Dynamic prompt shows current directory path (e.g. `/MYDIR$`). |
+| **Shell** | Command history (UP/DOWN), inline editing (LEFT/RIGHT/Backspace), Ctrl+C to cancel line, path navigation with `cd`, `cd ..`, `cd ./..`, `ls <path>`, `cat`, `echo > file`, `echo >> file` (append), `|` pipe (e.g. `cmd1 | cmd2`), `exec` for running ELF executables, `mkdir`, `rmdir`, `rm`, `heap`/`mem`/`pages` debug commands. Specific error messages (e.g. "Not found", "Directory not empty") instead of generic "FAIL". Dynamic prompt shows current directory path (e.g. `/MYDIR$`). |
 
 ## Requirements
 
@@ -146,6 +148,9 @@ shutdown Power off
 | `reboot` | `reboot` | Reset system via keyboard controller (port 0x64, 0xFE) |
 | `shutdown`, `poweroff` | `shutdown` | Power off via ACPI ports (0xB004, 0x604) |
 | `exec` | `exec <file>` | Load and run an ELF executable from NVFS |
+| `heap` | `heap` | Dump heap allocator block state |
+| `mem` | `mem` | Show physical memory usage (total/used/free frames) |
+| `pages` | `pages` | Show page directory/table mappings |
 
 ## Project layout
 

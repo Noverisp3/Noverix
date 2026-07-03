@@ -19,7 +19,7 @@ BIOS
              ├─ kernel/memory/pfa.c    → page frame allocator
              ├─ kernel/memory/paging.c → identity map 32MB, enable CR0.PG
              ├─ kernel/drivers/graphics.c → VBE framebuffer init + draw
-             ├─ kernel/memory/heap.c   → malloc/free allocator
+             ├─ kernel/memory/heap.c   → malloc/free/realloc/calloc allocator
              ├─ kernel/drivers/ata.c   → ATA probe
              ├─ kernel/drivers/nvfs.c  → mount NVFS from ATA LBA
              └─ while(1): readline → handle_cmd → dispatch
@@ -38,6 +38,7 @@ Project_002_OS/
 ├── kernel/
 │   ├── entry.S               # Entry: BSS zero → jmp kernel_main
 │   ├── kernel.c              # Shell: readline, history, cmd dispatch, serial input
+│   ├── lib.c / lib.h         # Shared utilities: memcpy, memset, strlen, strcpy, strcmp
 │   ├── cpu/
 │   │   ├── gdt.c / gdt.h     # GDT (null,code,data,user_code,user_data)
 │   │   ├── idt.c / idt.h     # IDT (32 ISR + 16 IRQ), register dump
@@ -106,24 +107,34 @@ Project_002_OS/
 
 ---
 
+### `kernel/lib.c` + `kernel/lib.h`
+
+- **Role:** Shared utility functions used across kernel modules, eliminating duplicated static implementations.
+- **Functions:**
+  - `lib_memcpy(dst, src, n)`: Copy n bytes | []
+  - `lib_memset(ptr, val, n)`: Set n bytes to val | []
+  - `lib_strlen(s)`: String length | []
+  - `lib_strcpy(dst, src)`: String copy | [lib_strlen, lib_memcpy]
+  - `lib_strcmp(a, b)`: String comparison | []
+- **Import:** None (standalone)
+
+---
+
 ### `kernel/kernel.c`
 
 - **Role:** Main shell. Initializes all subsystems, command loop.
 - **Functions:**
-  - `strlen(s)`: Length | []
-  - `strcpy(dst, src)`: Copy | []
-  - `strcmp(a, b)`: Compare | []
   - `reboot()`: Send 0xFE to port 0x64 | [inb, outb]
   - `shutdown()`: Write 0x2000 to port 0xB004 + 0x604 | [outw]
-   - `history_add(buf)`: Add command to history ring (16 entries), with overflow protection (shifts oldest when full) | [strcpy, strcmp]
+   - `history_add(buf)`: Add command to history ring (16 entries), with overflow protection (shifts oldest when full) | [lib_strcpy, lib_strcmp]
    - `readline(buf, max)`: Read input from keyboard + serial (via `read_char_any`), inline editing (LEFT/RIGHT move, mid-line insert/delete), UP/DOWN history, Ctrl+C (char 0x03) cancels line and prints ^C | [read_char_any, print_string, history_add]
    - `read_char_any(void)`: Read char from keyboard (get_char) or serial (serial_read_char) — non-blocking | [get_char, serial_data_available, serial_read_char]
-   - `execute_cmd(cmd, arg)`: Dispatch parsed command (extracted from handle_cmd for pipe reuse). Echo redirection has bounds checking on `>` operator. Hex/sleep commands have integer overflow guards. Includes `exec` for ELF binaries | [strcmp, print_string, clear_screen, print_hex, sleep_ms, nvfs_list, nvfs_chdir, nvfs_read, nvfs_write, nvfs_delete, nvfs_mkdir, nvfs_rmdir, reboot, shutdown, elf_exec]
+   - `execute_cmd(cmd, arg)`: Dispatch parsed command (extracted from handle_cmd for pipe reuse). Echo redirection has bounds checking on `>` operator. Hex/sleep commands have integer overflow guards. Includes `exec` for ELF binaries | [lib_strcmp, print_string, clear_screen, print_hex, sleep_ms, nvfs_list, nvfs_chdir, nvfs_read, nvfs_write, nvfs_delete, nvfs_mkdir, nvfs_rmdir, reboot, shutdown, elf_exec]
    - `handle_cmd(buf)`: Parse `|` pipe → split left/right → `set_capture(1)` → `execute_cmd(cmd1, arg1)` → `set_capture(0)` → copy captured output to `pipe_data` → `execute_cmd(cmd2, arg2)` | [execute_cmd, set_capture, get_capture]
    - `kernel_main(void)`: Init sequence → shell loop | [init_serial, init_gdt, init_idt, init_screen, init_keyboard, init_timer, pfa_init, init_paging, heap_init, ata_init, nvfs_mount]
 - **Static data:** `history[HISTORY_SIZE][LINE_BUF]`, `pipe_data[4096]`, `has_pipe_data`
 - **VBE init:** After paging, reads VBE info at `0x1000` (LFB, width, height, pitch, bpp). If LFB is non-zero, maps the framebuffer into page tables via `map_page()` (576 pages for 1024×768×24bpp), then calls `init_graphics()` to activate graphics mode. Falls back to text mode if LFB is zero (VBE unavailable).
-- **Import:** `screen.h`, `keyboard.h`, `serial.h`, `ata.h`, `nvfs.h`, `gdt.h`, `idt.h`, `timer.h`, `ports.h`, `graphics.h`, `elf.h`
+- **Import:** `lib.h`, `screen.h`, `keyboard.h`, `serial.h`, `ata.h`, `nvfs.h`, `gdt.h`, `idt.h`, `timer.h`, `ports.h`, `graphics.h`, `elf.h`
 - **New shell features over FAT16 version:** `mkdir`, `rmdir`, `cd` (with path, `..`, `./..`, `/`). Dynamic prompt showing current path (e.g. `/MYDIR$`). `>>` append operator. `|` pipe operator. `exec` for running ELF executables. Specific error messages via `nvfs_strerror(nvfs_errno)`.
 - **Pipe flow:** `set_capture(1)` → print_*/print_string redirect to 4KB capture buffer → `set_capture(0)` → `get_capture()` → copy to `pipe_data` → set `has_pipe_data=1` → execute cmd2 (cat/echo read pipe_data when arg is empty).
 - **Ctrl+C:** When `readline` receives char 0x03, it prints `^C\n` and returns an empty buffer.
@@ -206,7 +217,10 @@ Project_002_OS/
 - **Functions:**
   - `pfa_init(void)`: Mark reserved frames (null page, kernel, stack, legacy 0xA0000-0xFFFFF) via loop starting at 0x00000000 | [set_bit, serial_write_string]
   - `alloc_frame(void)`: Scan bitmap → first 0 bit → set to 1 → return physical address | [test_bit, set_bit]
+  - `alloc_frames(count)`: Allocate count contiguous frames (first-fit scan) | [test_bit, set_bit]
   - `free_frame(addr)`: Clear corresponding bit | [clear_bit]
+  - `free_frames(addr, count)`: Clear bits for count contiguous frames | [clear_bit]
+  - `get_free_frame_count(void)`: Return number of free frames | [test_bit]
   - `set_bit(frame)`: Internal — set bit in bitmap | []
   - `clear_bit(frame)`: Internal — clear bit | []
   - `test_bit(frame)`: Internal — test bit | []
@@ -223,6 +237,9 @@ Project_002_OS/
   - `init_paging(void)`: Alloc PD + first PT + PTs 4-32MB → load CR3 → set CR0.PG | [alloc_frame, create_table]
   - `create_table(virt, flags)`: Internal — alloc page table, set PDE | [alloc_frame]
   - `map_page(virt, phys, flags)`: Map virtual → physical, create PT if needed, invlpg | [create_table]
+  - `unmap_page(virt)`: Remove page mapping, clear PTE, flush TLB | []
+  - `get_page_mapping(virt)`: Walk PD+PT, return physical page if present | []
+  - `dump_page_info(virt)`: Debug — serial-log PDE/PTE details for a virtual address | [serial_write_string, serial_write_hex, get_page_mapping]
   - `read_cr0(void)`: Return CR0 | []
   - `read_cr3(void)`: Return CR3 | []
 - **Import:** `pfa.h`, `serial.h`
@@ -231,12 +248,15 @@ Project_002_OS/
 
 ### `kernel/memory/heap.c` + `heap.h`
 
-- **Role:** Kernel heap allocator — boundary-tag first-fit malloc/free.
+- **Role:** Kernel heap allocator — boundary-tag first-fit malloc/free/realloc/calloc.
 - **Constants:** `HEAP_START=0x800000`, `HEAP_SIZE=0x200000` (2MB region, identity mapped)
 - **Functions:**
   - `heap_init(void)`: Create 1 free block covering entire HEAP_SIZE | [set_footer, serial_write_string]
   - `malloc(size)`: Walk blocks → first-fit → split if remainder >= MIN_BLOCK (12) → return ptr after header | [set_footer]
+  - `calloc(num, size)`: Zeroed allocation — malloc + memset | [malloc, lib_memset]
+  - `realloc(ptr, size)`: Resize allocation — shrink in-place (split) or alloc-copy-free | [malloc, free, lib_memcpy]
   - `free(ptr)`: Mark free → merge with next block (if free) → merge with prev block via boundary tag footer (with bounds guard) | [set_footer]
+  - `heap_walk(void)`: Debug — iterate all blocks, print address/type/size, totals | [serial_write_string, serial_write_hex, serial_write_int]
   - `set_footer(addr, size)`: Write size at block end (for boundary tag) | []
 - **Import:** `serial.h`
 - **Bug fix:** Removed `prev_addr = (unsigned int)prev_hdr;` in backward merge (`free()`). This line assigned `prev_addr` the address of a local stack pointer instead of the heap block address, causing wrong footer and heap corruption.
@@ -248,11 +268,11 @@ Project_002_OS/
 - **Role:** ELF loader — loads 32-bit ELF executables from NVFS and switches to user-space.
 - **Constants:** `ELF_MAGIC=0x464C457F`, `PT_LOAD=1`, `SYSCALL_INT=0x80`
 - **Functions:**
-  - `elf_exec(path)`: Read ELF file from NVFS → validate magic → parse program headers → allocate pages → load segments → jump to entry point | [nvfs_read, alloc_frame, map_page]
+  - `elf_exec(path)`: Read ELF file from NVFS → validate magic → parse program headers → validate e_entry (must be within 0x00800000–0x00A00000) → validate phoff and phentsize → for each segment check p_offset+p_filesz overflow and p_vaddr+p_memsz overflow → validate segment end ≤ 0x00A00000 → allocate pages → load segments → set up user stack → jump to entry point | [nvfs_read, alloc_frame, map_page, serial_write_string]
   - `syscall_handler(regs)`: Handle software interrupt 0x80 (syscall dispatch) | []
-- **Import:** `nvfs.h`, `pfa.h`, `paging.h`, `idt.h`
+- **Import:** `nvfs.h`, `pfa.h`, `paging.h`, `idt.h`, `serial.h`
 - **User-space execution:** `elf_exec` maps the ELF segments into memory below the kernel, sets up a minimal user stack, and jumps to the entry point with CS=user_code and DS=user_data segments.
-- **Security:** Basic memory isolation — user-space code runs in ring 3 segments. Syscalls return to kernel via interrupt 0x80.
+- **Security:** ELF header validation (magic, phentsize ≥ sizeof(phdr), e_entry bounds 0x00800000–0x00A00000). Per-segment bounds checks with integer overflow guards. All segment loads must stay within the allowed range. Rejects malformed/invalid ELFs with serial-logged errors. Basic memory isolation — user-space code runs in ring 3 segments. Syscalls return to kernel via interrupt 0x80.
 
 ---
 
