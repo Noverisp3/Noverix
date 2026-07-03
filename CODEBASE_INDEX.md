@@ -56,6 +56,7 @@ Project_002_OS/
 │   └── mknvfs.py             # NVFS disk formatter (16MB, 32768 sectors)
 ├── linker.ld                 # ELF linker: 0x2000, PHDRS RX/RW
 ├── Makefile                  # clang + nasm + ld.bfd + objcopy + python
+├── noverix.img               # Combined disk (boot + kernel + NVFS)
 ├── nvfs_disk.img             # 16MB NVFS raw image
 ├── README.md
 └── currentfeatures.md

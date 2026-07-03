@@ -531,7 +531,7 @@ int nvfs_list(const char *path)
                 print_string(type_str);
                 print_string(de->name);
                 print_string("  ");
-                print_hex(ci.size);
+                print_int(ci.size);
                 print_string(ci.type == NVFS_TYPE_DIR ? " <DIR>\n" : " bytes\n");
             }
         }

@@ -53,17 +53,22 @@ Produces `build/os-image.bin` — a 1.44 MB floppy image and `nvfs_disk.img` —
 | Target | Action |
 | --- | --- |
 | `make` / `make all` | Build `os-image.bin` + `nvfs_disk.img` |
-| `make clean` | Remove `build/` and `nvfs_disk.img` |
-| `make run-qemu` | Build and launch QEMU with both images |
+| `make clean` | Remove `build/`, images |
+| `make run-qemu` | Floppy + NVFS disk (QEMU) |
+| `make run-qemu-combined` | Single-disk HDD boot with NVFS |
+| `make iso` | Build `build/os-image.iso` |
+| `make noverix.img` | Combined disk: `dd` to USB for real boot |
 
 ## Run
 
 ```sh
-make run-qemu
+make run-qemu              # floppy + separate NVFS (default)
+make run-qemu-combined     # single disk HDD boot
 ```
 
 Or directly:
 
+**Floppy + NVFS disk:**
 ```sh
 qemu-system-x86_64 -boot order=a \
   -drive format=raw,file=build/os-image.bin,if=floppy \
@@ -71,8 +76,20 @@ qemu-system-x86_64 -boot order=a \
   -device ide-hd,drive=ata0 -m 32 -serial stdio
 ```
 
-- Add `-display gtk` for graphical window (omit for serial-only console output).
+**Single-disk HDD (combined):**
+```sh
+qemu-system-x86_64 -boot order=c \
+  -drive file=noverix.img,format=raw,if=none,id=ata0 \
+  -device ide-hd,drive=ata0 -m 32
+```
+
+**Real hardware (USB):**
+```sh
+sudo dd if=noverix.img of=/dev/sdX bs=512
+```
+
 - `nvfs_disk.img` is a 16 MB raw image formatted as NVFS.
+- `noverix.img` is a combined disk (bootloader + kernel + NVFS) for single-device boot.
 - All file operations persist across reboots.
 - Use `-serial stdio` to pipe shell commands via script.
 
@@ -111,7 +128,7 @@ shutdown Power off
 | `echo` | `echo <text>` | Print text to screen |
 | `echo` (write) | `echo text > file` | Write text to a file (creates or overwrites) |
 | `cat` | `cat <file>` | Display file contents |
-| `ls` | `ls [path]` | List directory contents — shows `[DIR]` prefix + `<DIR>` size for directories |
+| `ls` | `ls [path]` | List directory contents — decimal file sizes, `[DIR]` prefix + `<DIR>` for directories |
 | `cd` | `cd [path]` | Change directory. Supports `/` (root), `..`, `./..`, `.` |
 | `mkdir` | `mkdir <path>` | Create directory |
 | `rmdir` | `rmdir <path>` | Remove empty directory |
@@ -153,6 +170,7 @@ shutdown Power off
 ├── build/                      # Build artifacts
 ├── tools/
 │   └── mknvfs.py               # NVFS disk formatter (16MB, 128 inodes)
+├── noverix.img                 # Combined disk (boot + kernel + NVFS)
 ├── nvfs_disk.img               # 16 MB NVFS disk image
 ├── linker.ld                   # ELF linker script
 ├── Makefile                    # Build system

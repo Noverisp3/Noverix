@@ -97,3 +97,17 @@ void print_hex(unsigned int num)
     hex[10] = '\0';
     print_string(hex);
 }
+
+void print_int(unsigned int num)
+{
+    char buf[12];
+    int i = 11;
+    buf[11] = 0;
+    if (num == 0) { print_string("0"); return; }
+    while (num && i > 0) {
+        i--;
+        buf[i] = '0' + (num % 10);
+        num /= 10;
+    }
+    print_string(buf + i);
+}

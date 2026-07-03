@@ -13,7 +13,7 @@
 | `echo <text>` | Print text |
 | `echo text > file` | Write text to file (creates or overwrites) |
 | `cat <file>` | Display file contents |
-| `ls [path]` | List files/directories (`[DIR]` tag + `<DIR>` label) |
+| `ls [path]` | List files/directories (decimal size, `[DIR]` tag + `<DIR>` label) |
 | `cd [path]` | Change directory (supports `/`, `..`, `./..`, `.`) |
 | `mkdir <path>` | Create directory |
 | `rmdir <path>` | Remove empty directory |

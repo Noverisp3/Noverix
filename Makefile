@@ -59,7 +59,7 @@ $(BUILD_DIR)/os-image.bin: $(BUILD_DIR)/bootloader.bin $(BUILD_DIR)/kernel.bin |
 	truncate -s 1474560 $@
 
 clean:
-	rm -rf $(BUILD_DIR) nvfs_disk.img os-image.iso combined.img
+	rm -rf $(BUILD_DIR) nvfs_disk.img os-image.iso noverix.img
 
 nvfs_disk.img: tools/mknvfs.py
 	python3 tools/mknvfs.py $@
@@ -68,7 +68,7 @@ $(BUILD_DIR)/os-image.iso: $(BUILD_DIR)/os-image.bin
 	xorriso -as mkisofs -b os-image.bin -no-emul-boot -boot-load-size 4 \
 	  -o $@ $(BUILD_DIR)
 
-combined.img: $(BUILD_DIR)/os-image.bin nvfs_disk.img
+noverix.img: $(BUILD_DIR)/os-image.bin nvfs_disk.img
 	cp $(BUILD_DIR)/os-image.bin $@
 	cat nvfs_disk.img >> $@
 	@echo "Created $@ — dd to USB: sudo dd if=$@ of=/dev/sdX bs=512"
@@ -81,9 +81,9 @@ run-qemu-iso: $(BUILD_DIR)/os-image.iso nvfs_disk.img
 	  -drive file=nvfs_disk.img,format=raw,if=none,id=ata0 \
 	  -device ide-hd,drive=ata0 -m 32
 
-run-qemu-combined: combined.img
+run-qemu-noverix: noverix.img
 	qemu-system-x86_64 -boot order=c \
-	  -drive file=combined.img,format=raw,if=none,id=ata0 \
+	  -drive file=noverix.img,format=raw,if=none,id=ata0 \
 	  -device ide-hd,drive=ata0 -m 32
 
 run: $(BUILD_DIR)/os-image.bin
