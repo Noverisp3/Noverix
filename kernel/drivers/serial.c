@@ -48,6 +48,25 @@ void serial_write_hex(unsigned int num)
     serial_write_string(hex);
 }
 
+void serial_write_int(unsigned int num)
+{
+    char buf[12];
+    int i = 11;
+    buf[11] = 0;
+    if (num == 0)
+    {
+        serial_write_string("0");
+        return;
+    }
+    while (num && i > 0)
+    {
+        i--;
+        buf[i] = '0' + (num % 10);
+        num /= 10;
+    }
+    serial_write_string(buf + i);
+}
+
 int serial_data_available(void)
 {
     return inb(COM1 + 5) & 1;

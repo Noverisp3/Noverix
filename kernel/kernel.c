@@ -13,6 +13,7 @@
 #include "memory/heap.h"
 #include "drivers/graphics.h"
 #include "elf.h"
+#include "lib.h"
 
 #define VBE_INFO_ADDR ((volatile unsigned int *)0x1000)
 
@@ -26,25 +27,6 @@
 
 static char history[HISTORY_SIZE][LINE_BUF];
 static int history_count;
-
-static int strlen(const char *s)
-{
-    int n = 0;
-    while (*s++) n++;
-    return n;
-}
-
-static void strcpy(char *dst, const char *src)
-{
-    if (!dst || !src) return;
-    while ((*dst++ = *src++));
-}
-
-static int strcmp(const char *a, const char *b)
-{
-    while (*a && *a == *b) { a++; b++; }
-    return *(unsigned char*)a - *(unsigned char*)b;
-}
 
 static void reboot(void)
 {
@@ -67,19 +49,19 @@ static int has_pipe_data;
     static void history_add(const char *buf)
     {
         if (!buf[0]) return;
-        if (history_count > 0 && strcmp(buf, history[history_count - 1]) == 0)
+        if (history_count > 0 && lib_strcmp(buf, history[history_count - 1]) == 0)
             return;
         if (history_count >= HISTORY_SIZE) {
             for (int i = 0; i < HISTORY_SIZE - 1; i++)
-                strcpy(history[i], history[i + 1]);
+                lib_strcpy(history[i], history[i + 1]);
             history_count = HISTORY_SIZE - 1;
-            strcpy(history[history_count], buf);
+            lib_strcpy(history[history_count], buf);
             return;
         }
         if (history_count < HISTORY_SIZE) history_count++;
         for (int i = history_count - 1; i > 0; i--)
-            strcpy(history[i], history[i - 1]);
-        strcpy(history[0], buf);
+            lib_strcpy(history[i], history[i - 1]);
+        lib_strcpy(history[0], buf);
     }
 
 static char read_char_any(void)
@@ -110,7 +92,7 @@ static void readline(char *buf, int max)
         if (pos > len) pos = len;
         if (c == KEY_UP && history_count > 0) {
             if (hist_pos == -1) {
-                strcpy(saved, buf);
+                lib_strcpy(saved, buf);
                 hist_pos = 0;
             } else if (hist_pos < history_count - 1) {
                 hist_pos++;
@@ -120,8 +102,8 @@ static void readline(char *buf, int max)
             set_cursor(start_x, start_y);
             for (int i = 0; i < len; i++) print_char(' ');
             set_cursor(start_x, start_y);
-            strcpy(buf, history[hist_pos]);
-            len = strlen(buf);
+            lib_strcpy(buf, history[hist_pos]);
+            len = lib_strlen(buf);
             pos = len;
             for (int i = 0; i < len; i++) print_char(buf[i]);
         } else if (c == KEY_DOWN) {
@@ -131,11 +113,11 @@ static void readline(char *buf, int max)
             for (int i = 0; i < len; i++) print_char(' ');
             set_cursor(start_x, start_y);
             if (hist_pos >= 0) {
-                strcpy(buf, history[hist_pos]);
+                lib_strcpy(buf, history[hist_pos]);
             } else {
-                strcpy(buf, saved);
+                lib_strcpy(buf, saved);
             }
-            len = strlen(buf);
+            len = lib_strlen(buf);
             pos = len;
             for (int i = 0; i < len; i++) print_char(buf[i]);
         } else if (c == KEY_LEFT) {
@@ -176,7 +158,7 @@ static void readline(char *buf, int max)
 
 static void execute_cmd(const char *cmd, char *arg)
 {
-    if (strcmp(cmd, "help") == 0 || strcmp(cmd, "?") == 0) {
+    if (lib_strcmp(cmd, "help") == 0 || lib_strcmp(cmd, "?") == 0) {
         print_string("Noverix Shell\n");
         print_string("-------------\n");
         print_string("help     Show this help\n");
@@ -197,7 +179,7 @@ static void execute_cmd(const char *cmd, char *arg)
         print_string("shutdown Power off\n");
         print_string("exec     Run ELF executable\n");
         print_string("|        Pipe: cmd1 | cmd2 (output of cmd1 goes to cmd2)\n");
-    } else if (strcmp(cmd, "echo") == 0) {
+    } else if (lib_strcmp(cmd, "echo") == 0) {
         int is_append = 0;
         char *redir = arg;
         while (redir < arg + LINE_BUF - 1 && *redir && *redir != '>') redir++;
@@ -215,8 +197,8 @@ static void execute_cmd(const char *cmd, char *arg)
             char *fname = redir + 1 + is_append;
             while (*fname == ' ') fname++;
             if (fname[0]) {
-                int r = is_append ? nvfs_append(fname, content, strlen(content))
-                                  : nvfs_write(fname, content, strlen(content));
+                int r = is_append ? nvfs_append(fname, content, lib_strlen(content))
+                                  : nvfs_write(fname, content, lib_strlen(content));
                 if (r == 0)
                     print_string("OK\n");
                 else {
@@ -234,9 +216,9 @@ static void execute_cmd(const char *cmd, char *arg)
                 print_string("\n");
             }
         }
-    } else if (strcmp(cmd, "clear") == 0) {
+    } else if (lib_strcmp(cmd, "clear") == 0) {
         clear_screen();
-    } else if (strcmp(cmd, "hex") == 0) {
+    } else if (lib_strcmp(cmd, "hex") == 0) {
         unsigned int n = 0;
         int k = 0;
         while (arg[k]) {
@@ -249,9 +231,9 @@ static void execute_cmd(const char *cmd, char *arg)
         }
         print_hex(n);
         print_string("\n");
-    } else if (strcmp(cmd, "ver") == 0) {
+    } else if (lib_strcmp(cmd, "ver") == 0) {
         print_string("Noverix v0.1\n");
-    } else if (strcmp(cmd, "sleep") == 0) {
+    } else if (lib_strcmp(cmd, "sleep") == 0) {
         unsigned int n = 0;
         int k = 0;
         while (arg[k]) {
@@ -271,7 +253,7 @@ static void execute_cmd(const char *cmd, char *arg)
         } else {
             print_string("Usage: sleep <ms> (1-10000)\n");
         }
-    } else if (strcmp(cmd, "ata") == 0) {
+    } else if (lib_strcmp(cmd, "ata") == 0) {
         int found = 0;
         for (int ch = 0; ch < 2; ch++) {
             for (int dr = 0; dr < 2; dr++) {
@@ -287,7 +269,7 @@ static void execute_cmd(const char *cmd, char *arg)
             }
         }
         if (!found) print_string("No drives found.\n");
-    } else if (strcmp(cmd, "cat") == 0) {
+    } else if (lib_strcmp(cmd, "cat") == 0) {
         if (arg[0]) {
             char tmp[512];
             int n = nvfs_read(arg, tmp, 511);
@@ -306,44 +288,44 @@ static void execute_cmd(const char *cmd, char *arg)
         } else {
             print_string("Usage: cat <file>\n");
         }
-    } else if (strcmp(cmd, "ls") == 0) {
+    } else if (lib_strcmp(cmd, "ls") == 0) {
         nvfs_list(arg[0] ? arg : "");
-    } else if (strcmp(cmd, "cd") == 0) {
+    } else if (lib_strcmp(cmd, "cd") == 0) {
         if (nvfs_chdir(arg[0] ? arg : "", 0) != 0) {
             print_string(nvfs_strerror(nvfs_errno));
             print_string("\n");
         }
-    } else if (strcmp(cmd, "mkdir") == 0) {
+    } else if (lib_strcmp(cmd, "mkdir") == 0) {
         if (arg[0]) {
             if (nvfs_mkdir(arg) == 0) print_string("OK\n");
             else { print_string(nvfs_strerror(nvfs_errno)); print_string("\n"); }
         } else {
             print_string("Usage: mkdir <path>\n");
         }
-    } else if (strcmp(cmd, "rmdir") == 0) {
+    } else if (lib_strcmp(cmd, "rmdir") == 0) {
         if (arg[0]) {
             if (nvfs_rmdir(arg) == 0) print_string("OK\n");
             else { print_string(nvfs_strerror(nvfs_errno)); print_string("\n"); }
         } else {
             print_string("Usage: rmdir <path>\n");
         }
-    } else if (strcmp(cmd, "rm") == 0) {
+    } else if (lib_strcmp(cmd, "rm") == 0) {
         if (arg[0]) {
             if (nvfs_delete(arg) == 0) print_string("OK\n");
             else { print_string(nvfs_strerror(nvfs_errno)); print_string("\n"); }
         } else {
             print_string("Usage: rm <file>\n");
         }
-    } else if (strcmp(cmd, "crash") == 0) {
+    } else if (lib_strcmp(cmd, "crash") == 0) {
         print_string("Triggering exception...\n");
         __asm__ volatile ("ud2");
-    } else if (strcmp(cmd, "reboot") == 0) {
+    } else if (lib_strcmp(cmd, "reboot") == 0) {
         print_string("Rebooting...\n");
         reboot();
-    } else if (strcmp(cmd, "shutdown") == 0 || strcmp(cmd, "poweroff") == 0) {
+    } else if (lib_strcmp(cmd, "shutdown") == 0 || lib_strcmp(cmd, "poweroff") == 0) {
         print_string("Shutting down...\n");
         shutdown();
-    } else if (strcmp(cmd, "exec") == 0) {
+    } else if (lib_strcmp(cmd, "exec") == 0) {
         if (arg[0]) {
             if (elf_exec(arg) != 0) {
                 print_string("Execution failed\n");
@@ -562,6 +544,86 @@ void kernel_main(void)
             free(c); free(d);
         } else {
             serial_write_string("[test] heap FAIL\n");
+        }
+    }
+
+    {
+        serial_write_string("[test] calloc\n");
+        char *z = (char *)calloc(1, 64);
+        if (z) {
+            int ok = 1;
+            for (int i = 0; i < 64; i++)
+                if (z[i]) { ok = 0; break; }
+            serial_write_string(ok ? "  zeroed OK\n" : "  NOT ZEROED!\n");
+            free(z);
+        } else {
+            serial_write_string("  FAIL\n");
+        }
+    }
+
+    {
+        serial_write_string("[test] realloc\n");
+        char *r = (char *)malloc(16);
+        if (r) {
+            for (int i = 0; i < 15; i++) r[i] = 'A' + i;
+            r[15] = 0;
+            char *rr = (char *)realloc(r, 64);
+            if (rr) {
+                int ok = 1;
+                for (int i = 0; i < 15; i++)
+                    if (rr[i] != (char)('A' + i)) { ok = 0; break; }
+                serial_write_string(ok ? "  data preserved OK\n" : "  DATA CORRUPTED!\n");
+                free(rr);
+            } else {
+                serial_write_string("  realloc FAIL\n");
+            }
+        }
+    }
+
+    {
+        serial_write_string("[test] heap_walk\n");
+        heap_walk();
+    }
+
+    {
+        serial_write_string("[test] PFA free frames: ");
+        serial_write_int(get_free_frame_count());
+        serial_write_string("\n");
+    }
+
+    {
+        serial_write_string("[test] PFA alloc 3 contiguous frames... ");
+        unsigned int *cf = (unsigned int *)alloc_frames(3);
+        if (cf) {
+            serial_write_string("OK at ");
+            serial_write_hex((unsigned int)cf);
+            serial_write_string("\n");
+            cf[0] = 0xAA; cf[512] = 0xBB; cf[1024] = 0xCC;
+            free_frames(cf, 3);
+            serial_write_string("[test] PFA free_frames OK\n");
+        } else {
+            serial_write_string("FAIL\n");
+        }
+    }
+
+    {
+        serial_write_string("[test] paging map_page + get_page_mapping... ");
+        unsigned int *phys = (unsigned int *)alloc_frame();
+        if (phys) {
+            unsigned int test_virt = 0x00F00000;
+            map_page(test_virt, (unsigned int)phys, PAGE_WRITE);
+            unsigned int mapped_phys = 0;
+            int r = get_page_mapping(test_virt, &mapped_phys);
+            if (r == 0 && mapped_phys == ((unsigned int)phys & 0xFFFFF000)) {
+                serial_write_string("OK (virt=");
+                serial_write_hex(test_virt);
+                serial_write_string(" -> phys=");
+                serial_write_hex(mapped_phys);
+                serial_write_string(")\n");
+            } else {
+                serial_write_string("FAIL\n");
+            }
+            free_frame(phys);
         }
     }
 

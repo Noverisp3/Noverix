@@ -27,7 +27,8 @@ KERNEL_OBJS = \
 	$(BUILD_DIR)/paging.o \
 	$(BUILD_DIR)/heap.o \
 	$(BUILD_DIR)/graphics.o \
-	$(BUILD_DIR)/elf.o
+	$(BUILD_DIR)/elf.o \
+	$(BUILD_DIR)/lib.o
 
 .PHONY: all clean run run-qemu iso
 

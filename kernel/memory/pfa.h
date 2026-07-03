@@ -7,6 +7,9 @@
 
 void pfa_init(void);
 void *alloc_frame(void);
+void *alloc_frames(unsigned int count);
 void free_frame(void *addr);
+void free_frames(void *addr, unsigned int count);
+int get_free_frame_count(void);
 
 #endif

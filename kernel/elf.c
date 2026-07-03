@@ -5,6 +5,7 @@
 #include "drivers/screen.h"
 #include "drivers/serial.h"
 #include "drivers/keyboard.h"
+#include "lib.h"
 
 typedef struct
 {
@@ -99,40 +100,6 @@ static noverix_api_t kernel_api = {
     .nvfs_is_mounted = nvfs_is_mounted};
 
 static unsigned char elf_load_buf[128 * 1024];
-
-static void elf_memcpy(void *dst, const void *src, unsigned int n)
-{
-    unsigned char *d = (unsigned char *)dst;
-    const unsigned char *s = (const unsigned char *)src;
-    while (n--)
-        *d++ = *s++;
-}
-
-static void elf_memset(void *dst, int v, unsigned int n)
-{
-    unsigned char *d = (unsigned char *)dst;
-    while (n--)
-        *d++ = (unsigned char)v;
-}
-
-static void serial_write_int(unsigned int num)
-{
-    char buf[12];
-    int i = 11;
-    buf[11] = 0;
-    if (num == 0)
-    {
-        serial_write_string("0");
-        return;
-    }
-    while (num && i > 0)
-    {
-        i--;
-        buf[i] = '0' + (num % 10);
-        num /= 10;
-    }
-    serial_write_string(buf + i);
-}
 
 int elf_exec(const char *path)
 {
@@ -272,7 +239,7 @@ int elf_exec(const char *path)
             serial_write_hex(phdr->p_vaddr);
             serial_write_string("\n");
 
-            elf_memcpy(dest, src, phdr->p_filesz);
+            lib_memcpy(dest, src, phdr->p_filesz);
 
             if (phdr->p_memsz > phdr->p_filesz)
             {
@@ -283,7 +250,7 @@ int elf_exec(const char *path)
                 serial_write_hex(phdr->p_vaddr + phdr->p_filesz);
                 serial_write_string("\n");
 
-                elf_memset(dest + phdr->p_filesz, 0, zero_size);
+                lib_memset(dest + phdr->p_filesz, 0, zero_size);
             }
         }
         else

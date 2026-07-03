@@ -1,5 +1,6 @@
 #include "heap.h"
 #include "../drivers/serial.h"
+#include "../lib.h"
 
 #define HEADER_SIZE 4
 #define FOOTER_SIZE 4
@@ -201,4 +202,51 @@ void free(void *ptr)
             }
         }
     }
+}
+
+void *calloc(unsigned int num, unsigned int size)
+{
+    unsigned int total = num * size;
+    void *ptr = malloc(total);
+    if (ptr)
+        lib_memset(ptr, 0, total);
+    return ptr;
+}
+
+void heap_walk(void)
+{
+    unsigned int addr = HEAP_START;
+    unsigned int total_free = 0, total_used = 0, blocks = 0;
+    serial_write_string("[heap] walk:\n");
+    while (addr < HEAP_START + HEAP_SIZE)
+    {
+        unsigned int *hdr = (unsigned int *)addr;
+        unsigned int block_size = *hdr & ~1;
+        int is_free = !(*hdr & 1);
+        if (block_size == 0 || block_size > HEAP_SIZE)
+        {
+            serial_write_string("  CORRUPT at ");
+            serial_write_hex(addr);
+            serial_write_char('\n');
+            break;
+        }
+        serial_write_string("  ");
+        serial_write_hex(addr);
+        serial_write_string(is_free ? " free " : " used ");
+        serial_write_hex(block_size);
+        serial_write_string(" (data=");
+        serial_write_int(block_size - HEADER_SIZE - FOOTER_SIZE);
+        serial_write_string(")\n");
+        if (is_free) total_free += block_size;
+        else total_used += block_size;
+        blocks++;
+        addr += block_size;
+    }
+    serial_write_string("  blocks=");
+    serial_write_int(blocks);
+    serial_write_string(" free=");
+    serial_write_hex(total_free);
+    serial_write_string(" used=");
+    serial_write_hex(total_used);
+    serial_write_char('\n');
 }

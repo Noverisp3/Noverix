@@ -67,3 +67,40 @@ void free_frame(void *addr)
     unsigned int frame = FRAME(addr);
     if (frame < total_frames) clear_bit(frame);
 }
+
+int get_free_frame_count(void)
+{
+    int count = 0;
+    for (unsigned int i = 0; i < total_frames; i++)
+        if (!test_bit(i)) count++;
+    return count;
+}
+
+void *alloc_frames(unsigned int count)
+{
+    if (count == 0 || count > total_frames) return 0;
+    for (unsigned int start = 0; start <= total_frames - count; start++)
+    {
+        int ok = 1;
+        for (unsigned int j = 0; j < count; j++)
+        {
+            if (test_bit(start + j)) { ok = 0; break; }
+        }
+        if (ok)
+        {
+            for (unsigned int j = 0; j < count; j++)
+                set_bit(start + j);
+            return ADDR(start);
+        }
+    }
+    serial_write_string("[pfa] OOM for contiguous frames\n");
+    return 0;
+}
+
+void free_frames(void *addr, unsigned int count)
+{
+    unsigned int start = FRAME(addr);
+    for (unsigned int j = 0; j < count; j++)
+        if (start + j < total_frames)
+            clear_bit(start + j);
+}
