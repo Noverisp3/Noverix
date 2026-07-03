@@ -39,10 +39,10 @@ struct __attribute__((packed)) nvfs_extent {
 struct __attribute__((packed)) nvfs_inode {
     unsigned int size;
     unsigned char type;
-    unsigned char reserved[3];
+    unsigned char ctime[3];  /* 24-bit creation time (seconds since boot) */
     unsigned int extent_count;
     struct nvfs_extent extents[14];
-    unsigned char padding[4];
+    unsigned int mtime;      /* 32-bit modification time */
 };
 
 struct __attribute__((packed)) nvfs_dirent {

@@ -42,11 +42,13 @@ def create(path="nvfs_disk.img"):
 
     # Inode table at sectors 10-41
     # Root inode (inode 0): directory, size 0, no extents
-    inode0 = struct.pack('<IB3xI112s4x',
-        0,     # size
-        2,     # type = directory
-        0,     # extent_count = 0
-        b'\x00' * 112,
+    inode0 = struct.pack('<IB3sI112sI',
+        0,         # size
+        2,         # type = directory
+        b'\x00\x00\x00',  # ctime = 0
+        0,         # extent_count = 0
+        b'\x00' * 112,    # extents
+        0,         # mtime = 0
     )
     inode_offset = INODE_START * SECTOR_SIZE
     disk[inode_offset : inode_offset + INODE_SIZE] = inode0

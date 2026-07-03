@@ -2,6 +2,7 @@
 #include "ata.h"
 #include "../drivers/screen.h"
 #include "../drivers/serial.h"
+#include "../cpu/timer.h"
 
 int nvfs_errno;
 
@@ -102,14 +103,15 @@ static int inode_read(unsigned inum, struct nvfs_inode *inode)
     unsigned char *p = buf + off;
     inode->size = *(unsigned int *)(p + 0);
     inode->type = *(p + 4);
-    inode->reserved[0] = *(p + 5);
-    inode->reserved[1] = *(p + 6);
-    inode->reserved[2] = *(p + 7);
+    inode->ctime[0] = *(p + 5);
+    inode->ctime[1] = *(p + 6);
+    inode->ctime[2] = *(p + 7);
     inode->extent_count = *(unsigned int *)(p + 8);
     for (unsigned i = 0; i < NVFS_MAX_EXTENTS; i++) {
         inode->extents[i].start = *(unsigned int *)(p + 12 + i * 8);
         inode->extents[i].count = *(unsigned int *)(p + 12 + i * 8 + 4);
     }
+    inode->mtime = *(unsigned int *)(p + 124);
     return 0;
 }
 
@@ -122,14 +124,15 @@ static int inode_write(unsigned inum, const struct nvfs_inode *inode)
     unsigned char *p = buf + off;
     *(unsigned int *)(p + 0) = inode->size;
     *(p + 4) = inode->type;
-    *(p + 5) = inode->reserved[0];
-    *(p + 6) = inode->reserved[1];
-    *(p + 7) = inode->reserved[2];
+    *(p + 5) = inode->ctime[0];
+    *(p + 6) = inode->ctime[1];
+    *(p + 7) = inode->ctime[2];
     *(unsigned int *)(p + 8) = inode->extent_count;
     for (unsigned i = 0; i < NVFS_MAX_EXTENTS; i++) {
         *(unsigned int *)(p + 12 + i * 8) = inode->extents[i].start;
         *(unsigned int *)(p + 12 + i * 8 + 4) = inode->extents[i].count;
     }
+    *(unsigned int *)(p + 124) = inode->mtime;
     return write_sector(sec, buf);
 }
 
@@ -224,6 +227,18 @@ static int extent_load_all(const struct nvfs_inode *inode,
     return direct + r;
 }
 
+static unsigned now_sec(void)
+{
+    return get_ticks() / 100;
+}
+
+static void inode_set_ctime(struct nvfs_inode *inode, unsigned t)
+{
+    inode->ctime[0] = t & 0xFF;
+    inode->ctime[1] = (t >> 8) & 0xFF;
+    inode->ctime[2] = (t >> 16) & 0xFF;
+}
+
 /* ------------------------------------------------------------------ */
 /* Inode alloc / free                                                  */
 /* ------------------------------------------------------------------ */
@@ -233,8 +248,11 @@ static int inode_alloc(unsigned char type)
     for (unsigned i = 1; i < sb_inode_count; i++) {
         if (inode_read(i, &inode) != 0) continue;
         if (inode.type == 0) {
+            unsigned t = now_sec();
             inode.size = 0;
             inode.type = type;
+            inode_set_ctime(&inode, t);
+            inode.mtime = t;
             inode.extent_count = 0;
             for (int e = 0; e < NVFS_MAX_EXTENTS; e++) {
                 inode.extents[e].start = 0;
@@ -250,13 +268,16 @@ static int inode_alloc(unsigned char type)
         nvfs_errno = NVFS_ERR_NO_INODE;
         return -1;
     }
-    /* Retry: the newly added sector gives us 4 more inodes */
+    /* Retry: the newly added sector gives us more inodes */
     for (unsigned i = sb_inode_count - (NVFS_SECTOR_SIZE / NVFS_INODE_SIZE);
          i < sb_inode_count; i++) {
         if (inode_read(i, &inode) != 0) continue;
         if (inode.type == 0) {
+            unsigned t = now_sec();
             inode.size = 0;
             inode.type = type;
+            inode_set_ctime(&inode, t);
+            inode.mtime = t;
             inode.extent_count = 0;
             for (int e = 0; e < NVFS_MAX_EXTENTS; e++) {
                 inode.extents[e].start = 0;
@@ -473,8 +494,9 @@ static int dir_add(unsigned dir_inode, const char *name, unsigned child_inode)
                 if (*(unsigned int *)(tmp + off + 28) == 0) {
                     for (int k = 0; k < 32; k++) tmp[off + k] = nd[k];
                     int ret = write_block(cache[i].start + j, tmp);
-                    if (ret != 0) nvfs_errno = NVFS_ERR_IO;
-                    return ret;
+                    if (ret != 0) { nvfs_errno = NVFS_ERR_IO; return -1; }
+                    inode.mtime = now_sec();
+                    return inode_write(dir_inode, &inode);
                 }
             }
         }
@@ -495,6 +517,7 @@ static int dir_add(unsigned dir_inode, const char *name, unsigned child_inode)
         return -1;
     }
 
+    inode.mtime = now_sec();
     int ret = inode_write(dir_inode, &inode);
     if (ret != 0) nvfs_errno = NVFS_ERR_IO;
     return ret;
@@ -529,8 +552,9 @@ static int dir_remove(unsigned dir_inode, const char *name)
                 if (match) {
                     de->inode = 0;
                     int ret = write_block(cache[i].start + j, tmp);
-                    if (ret != 0) nvfs_errno = NVFS_ERR_IO;
-                    return ret;
+                    if (ret != 0) { nvfs_errno = NVFS_ERR_IO; return -1; }
+                    inode.mtime = now_sec();
+                    return inode_write(dir_inode, &inode);
                 }
             }
         }
@@ -764,6 +788,9 @@ int nvfs_list(const char *path)
                 print_string(de->name);
                 print_string("  ");
                 print_int(ci.size);
+                print_string("  ");
+                print_int(ci.mtime);
+                print_string("s");
                 print_string(ci.type == NVFS_TYPE_DIR ? " <DIR>\n" : " bytes\n");
             }
         }
@@ -817,6 +844,7 @@ int nvfs_write(const char *path, const void *data, unsigned size)
             nvfs_errno = NVFS_ERR_NO_SPACE;
             return -1;
         }
+        inode.mtime = now_sec();
 
         /* Persist new inode first — if power fails here, old data is intact */
         if (inode_write(inum, &inode) != 0) {
@@ -1056,6 +1084,7 @@ int nvfs_append(const char *path, const void *data, unsigned size)
     if (extent_write(&inode, (const unsigned char *)tmp, old + add) != 0) {
         nvfs_errno = NVFS_ERR_NO_SPACE; return -1;
     }
+    inode.mtime = now_sec();
     if (inode_write(inum, &inode) != 0) { nvfs_errno = NVFS_ERR_IO; return -1; }
 
     /* Safe to free old blocks now */

@@ -129,6 +129,10 @@ static void readline(char *buf, int max)
             if (pos > 0) { pos--; print_string("\b"); }
         } else if (c == KEY_RIGHT) {
             if (pos < len) { print_char(buf[pos]); pos++; }
+        } else if (c == 3) {
+            print_string("^C\n");
+            buf[0] = 0;
+            return;
         } else if (c == '\n') {
             print_char('\n');
             buf[len] = 0;
