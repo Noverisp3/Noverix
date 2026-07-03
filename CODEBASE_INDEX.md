@@ -100,7 +100,7 @@ Project_002_OS/
   - `reboot()`: Send 0xFE to port 0x64 | [inb, outb]
   - `shutdown()`: Write 0x2000 to port 0xB004 + 0x604 | [outw]
   - `history_add(buf)`: Add command to history ring (16 entries) | [strcpy, strcmp]
-  - `readline(buf, max)`: Read input from keyboard + serial (via `read_char_any`), inline editing (LEFT/RIGHT move, mid-line insert/delete), UP/DOWN history | [read_char_any, print_string, history_add]
+  - `readline(buf, max)`: Read input from keyboard + serial (via `read_char_any`), inline editing (LEFT/RIGHT move, mid-line insert/delete), UP/DOWN history, Ctrl+C (char 0x03) cancels line and prints ^C | [read_char_any, print_string, history_add]
   - `read_char_any(void)`: Read char from keyboard (get_char) or serial (serial_read_char) — non-blocking | [get_char, serial_data_available, serial_read_char]
    - `execute_cmd(cmd, arg)`: Dispatch parsed command (extracted from handle_cmd for pipe reuse) | [strcmp, print_string, clear_screen, print_hex, sleep_ms, nvfs_list, nvfs_chdir, nvfs_read, nvfs_write, nvfs_delete, nvfs_mkdir, nvfs_rmdir, reboot, shutdown]
    - `handle_cmd(buf)`: Parse `|` pipe → split left/right → `set_capture(1)` → `execute_cmd(cmd1, arg1)` → `set_capture(0)` → copy captured output to `pipe_data` → `execute_cmd(cmd2, arg2)` | [execute_cmd, set_capture, get_capture]
@@ -109,6 +109,7 @@ Project_002_OS/
 - **Import:** `screen.h`, `keyboard.h`, `serial.h`, `ata.h`, `nvfs.h`, `gdt.h`, `idt.h`, `timer.h`, `ports.h`
 - **New shell features over FAT16 version:** `mkdir`, `rmdir`, `cd` (with path, `..`, `./..`, `/`). Dynamic prompt showing current path (e.g. `/MYDIR$`). `>>` append operator. `|` pipe operator. Specific error messages via `nvfs_strerror(nvfs_errno)`.
 - **Pipe flow:** `set_capture(1)` → print_*/print_string redirect to 4KB capture buffer → `set_capture(0)` → `get_capture()` → copy to `pipe_data` → set `has_pipe_data=1` → execute cmd2 (cat/echo read pipe_data when arg is empty).
+- **Ctrl+C:** When `readline` receives char 0x03, it prints `^C\n` and returns an empty buffer.
 - **Serial input:** `readline` polls both keyboard (IRQ1 ring buffer) and COM1 serial (non-blocking poll). Allows command piping via `-serial stdio`.
 
 ---
@@ -171,10 +172,9 @@ Project_002_OS/
 
 ### `kernel/cpu/timer.c` + `timer.h`
 
-- **Role:** PIT channel 0 with atomic tick counter. `sleep_ms` function.
+- **Role:** PIT channel 0 tick counter. `sleep_ms` function. Provides time source for file timestamps.
 - **Functions:**
-  - `timer_get_tick()`: `lock xaddl` atomic read + increment tick_count | []
-  - `timer_handler(regs)`: Call `timer_get_tick()` to increment | [timer_get_tick]
+  - `timer_handler(regs)`: Increment `tick_count` by 1 | []
   - `init_timer(freq)`: Set divisor, register IRQ0 handler | [outb, register_interrupt_handler]
   - `get_ticks(void)`: Return tick_count | []
   - `sleep_ms(ms)`: Busy-wait based on tick difference | []
@@ -250,8 +250,10 @@ Project_002_OS/
 - **Global:** `nvfs_errno` — set by all public API functions on error
 - **Data types:**
   - `nvfs_extent`: {start (uint), count (uint)} — a contiguous extent
-  - `nvfs_inode`: {size (uint), type (byte), reserved[3], extent_count (uint), extents[14], padding[4]}
+  - `nvfs_inode`: {size (uint), type (byte), ctime[3] (24-bit), extent_count (uint), extents[14], mtime (uint)}
     - type: `NVFS_TYPE_FILE=1`, `NVFS_TYPE_DIR=2`
+    - ctime: creation time (seconds since boot, 24-bit ~194 day range)
+    - mtime: modification time (32-bit seconds since boot)
   - `nvfs_dirent`: {name[28], inode (uint)} — directory entry
 - **Static data:** `mounted`, `nvfs_ch`, `nvfs_dr`, `nvfs_cwd`, `sb_*` (superblock fields incl. `sb_inode_blocks`)
 - **Disk format:**
@@ -264,7 +266,9 @@ Project_002_OS/
   - `read_sector(lba, buf)` / `write_sector(lba, buf)`: Single sector I/O | [ata_read_sectors, ata_write_sectors]
   - `read_block(block, buf)` / `write_block(block, buf)`: Map block → LBA (data_start + block) | [read_sector, write_sector]
   - `bitmap_test(block)`, `bitmap_set(block, used)`, `bitmap_find(count)`: Block bitmap management | [read_sector, write_sector]
-  - `inode_read(inum, inode)` / `inode_write(inum, inode)`: Read/write inode from table | [read_sector, write_sector]
+  - `inode_read(inum, inode)` / `inode_write(inum, inode)`: Read/write inode (includes ctime[3] and mtime fields) | [read_sector, write_sector]
+  - `now_sec(void)`: Return seconds since boot (`get_ticks() / 100`) | [get_ticks]
+  - `inode_set_ctime(inode, t)`: Pack 24-bit timestamp into ctime[3] | []
   - `inode_alloc(type)`: Find free inode — if exhausted, calls `expand_inode_table()` | [inode_read, inode_write, expand_inode_table]
   - `inode_free(inum)`: Free inode + all extent blocks (including indirect) | [inode_read, inode_write, bitmap_set, extent_load_all]
   - `expand_inode_table(void)`: Alloc block from bitmap → zero → extend inode table → update superblock | [bitmap_find, bitmap_set, sb_write_field]
@@ -286,7 +290,7 @@ Project_002_OS/
 
 - **Public API:**
   - `nvfs_mount(void)`: Read superblock → set sb_* fields → set nvfs_cwd = root | [find_drive, read_sector]
-  - `nvfs_list(path)`: List directory — optional path, `[DIR]` tag + `<DIR>` + decimal size | [resolve_path, inode_read, read_block, extent_load_all]
+  - `nvfs_list(path)`: List directory — `[DIR]` tag, decimal size, mtime in seconds | [resolve_path, inode_read, read_block, extent_load_all]
   - `nvfs_read(path, buf, max)`: Read file | [resolve_path, dir_find, inode_read, extent_read]
   - `nvfs_write(path, data, size)`: Write/overwrite file with shadow paging (alloc new → persist inode → free old) | [resolve_path, dir_find, inode_alloc, extent_write, dir_add, inode_write]
   - `nvfs_delete(path)`: Delete file | [resolve_path, dir_find, inode_read, inode_free, dir_remove]

@@ -8,16 +8,16 @@ A minimal x86 hobby operating system built from scratch. Boots from real mode in
 |------|---------|
 | **Boot** | Real-mode → protected-mode transition, A20 gate enable, GDT loading, forward `rep movsd` safe kernel copy. |
 | **Disk I/O** | ATA PIO (LBA28) read/write, dual-channel primary/secondary, IDENTIFY-based drive detection, sector-level access. |
-| **NVFS** | Extent-based filesystem: superblock (sector 1), block bitmap (sectors 2–9), inode table (sectors 10–41, expandable), data blocks (sectors 42–32767). Each inode has 13 direct extents + 1 indirect block pointer (linked extents, up to 64 more extents). Shadow paging for crash-safe writes. Dynamic inode table expansion when full. |
+| **NVFS** | Extent-based filesystem: superblock (sector 1), block bitmap (sectors 2–9), inode table (sectors 10–41, expandable), data blocks (sectors 42–32767). Each inode has 13 direct extents + 1 indirect block pointer (linked extents, up to 64 more extents). Shadow paging for crash-safe writes. Dynamic inode table expansion when full. File timestamps (ctime/mtime, seconds since boot) stored in inode. |
 | **VGA text mode** | 80×25 text buffer, hardware cursor, terminal scrolling, hex/dec rendering. |
 | **PS/2 keyboard** | Interrupt-driven ring buffer, shift/caps, command history with arrow keys. |
 | **Interrupts** | IDT with 32 exception ISRs and 16 IRQs. Full register dump on exception (`ud2` crash command). |
-| **Timer (PIT)** | Atomic tick counter via `LOCK XADD`, `sleep_ms()` for delays. |
+| **Timer (PIT)** | Tick counter via IRQ0, `sleep_ms()` for delays, `get_ticks()` for time source. |
 | **Serial I/O** | COM1 serial port — kernel logging, debug output, and shell input via `-serial stdio`. |
 | **Memory** | Page Frame Allocator (bitmap-based, 1 bit per 4KB frame, 8192 frames for 32MB). |
 | **Paging** | 32-bit x86 two-level paging (PD + PT), identity map 0–32MB, `map_page()` for custom mappings, CR0.PG enabled. |
 | **Heap** | `malloc`/`free` allocator at 0x800000 (2MB), boundary-tag first-fit, split/coalesce, serial OOM logging. |
-| **Shell** | Command history (UP/DOWN), inline editing (LEFT/RIGHT/Backspace), path navigation with `cd`, `cd ..`, `cd ./..`, `ls <path>`, `cat`, `echo > file`, `echo >> file` (append), `|` pipe (e.g. `cmd1 | cmd2`), `mkdir`, `rmdir`, `rm`. Specific error messages (e.g. "Not found", "Directory not empty") instead of generic "FAIL". Dynamic prompt shows current directory path (e.g. `/MYDIR$`). |
+| **Shell** | Command history (UP/DOWN), inline editing (LEFT/RIGHT/Backspace), Ctrl+C to cancel line, path navigation with `cd`, `cd ..`, `cd ./..`, `ls <path>` (shows modification time), `cat`, `echo > file`, `echo >> file` (append), `|` pipe (e.g. `cmd1 | cmd2`), `mkdir`, `rmdir`, `rm`. Specific error messages (e.g. "Not found", "Directory not empty") instead of generic "FAIL". Dynamic prompt shows current directory path (e.g. `/MYDIR$`). |
 
 ## Requirements
 
@@ -106,10 +106,10 @@ Noverix Shell
 clear    Clear screen
 echo     Print text or write file (echo text > file, echo text >> file for append)
 cat      Display file contents (cat reads pipe when no file)
-ls       List files/directories
+ls       List files with mtime (ls, ls <dir>)
 cd       Change directory
 mkdir    Create directory
-rmdir    Remove directory
+rmdir    Remove empty directory
 rm       Delete file
 hex      Print a number in hex
 ver      Show version
