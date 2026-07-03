@@ -23,7 +23,7 @@ def create(path="nvfs_disk.img"):
     disk = bytearray(DISK_SECTORS * SECTOR_SIZE)
 
     # Superblock at sector 1
-    sb = struct.pack('<4sIIIIIIIIB475x',
+    sb = struct.pack('<4sIIIIIIIIIB475x',
         b'NVFS',
         1,                     # version
         DISK_SECTORS,          # total_sectors
@@ -33,6 +33,7 @@ def create(path="nvfs_disk.img"):
         INODE_START,           # inode_start
         INODE_COUNT,           # inode_count
         DATA_START,            # data_start
+        INODE_SECTORS,         # inode_blocks
         0,                     # state = clean
     )
     disk[SUPERBLOCK_SECTOR * SECTOR_SIZE : SUPERBLOCK_SECTOR * SECTOR_SIZE + len(sb)] = sb
