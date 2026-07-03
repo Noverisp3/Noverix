@@ -245,7 +245,7 @@ Project_002_OS/
   - `ata_read_sectors(ch, dr, lba, count, buffer)`: Call `ata_pio(write=0)` | [ata_pio]
   - `ata_write_sectors(ch, dr, lba, count, buffer)`: Call `ata_pio(write=1)` | [ata_pio]
 - **Import:** `ports.h`, `serial.h`
-- **BSS workaround:** `ata_model[2][2][41]` sits adjacent to `sb_bitmap_start` (NVFS BSS variable). When ATA IDENTIFY writes a model string >40 bytes, it overflows into NVFS state → zeroes `sb_bitmap_start` → commands FAIL. Added `ata_padding[4096]` as a 4KB buffer zone preventing overflow.
+- **Model string safety:** Model string is extracted from IDENTIFY data via a bounded loop (40 bytes) into `ata_model[2][2][41]`, ensuring no overflow into adjacent BSS. Stack buffer `buf[256]` holds raw IDENTIFY data from port reads, avoiding BSS corruption entirely.
 
 ---
 
