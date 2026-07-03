@@ -179,7 +179,7 @@ disk_sectors    dw 0
 sector          db 2
 head            db 0
 cylinder        db 0
-msg_loading     db "Noveris OS - Loading kernel...", 13, 10, 0
+msg_loading     db "Noverix - Loading kernel...", 13, 10, 0
 msg_loaded      db "Kernel loaded.", 13, 10, 0
 msg_disk_error  db "Disk error!", 13, 10, 0
 

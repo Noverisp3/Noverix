@@ -1,6 +1,6 @@
-# Noveris OS
+# Noverix
 
-A minimal x86 hobby operating system built from scratch. Boots from real mode into 32-bit protected mode with paging, heap allocator, and a command-line shell. Uses **NVFS** (Noveris File System) — an extent-based filesystem that replaces FAT16.
+A minimal x86 hobby operating system built from scratch. Boots from real mode into 32-bit protected mode with paging, heap allocator, and a command-line shell. Uses **NVFS** (Noverix File System) — an extent-based filesystem that replaces FAT16.
 
 ## Features
 
@@ -96,12 +96,12 @@ sudo dd if=noverix.img of=/dev/sdX bs=512
 ## Shell
 
 ```
-Noveris OS v0.1
+Noverix v0.1
 ================
 Type 'help' for commands.
 
 /$ help
-Noveris OS Shell
+Noverix Shell
 ----------------
 clear    Clear screen
 echo     Print text or write file (echo text > file)

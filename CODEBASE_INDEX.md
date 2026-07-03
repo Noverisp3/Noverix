@@ -1,4 +1,4 @@
-# CODEBASE INDEX — Noveris OS
+# CODEBASE INDEX — Noverix OS
 
 ## 1. KIẾN TRÚC TỔNG QUAN & LUỒNG DỮ LIỆU
 
@@ -240,7 +240,7 @@ Project_002_OS/
 
 ### `kernel/drivers/nvfs.c` + `nvfs.h`
 
-- **Vai trò:** NVFS (Noveris File System) — extent-based filesystem driver thay thế FAT16.
+- **Vai trò:** NVFS (Noverix File System) — extent-based filesystem driver thay thế FAT16.
 - **Hằng số:** `NVFS_MAGIC="NVFS"`, `NVFS_SECTOR_SIZE=512`, `NVFS_INODE_SIZE=128`, `NVFS_DIRENT_SIZE=32`, `NVFS_MAX_EXTENTS=14`, `NVFS_MAX_NAME=27`, `NVFS_ROOT_INODE=0`
 - **Kiểu dữ liệu:**
   - `nvfs_extent`: {start (uint), count (uint)} — một extent liên tục

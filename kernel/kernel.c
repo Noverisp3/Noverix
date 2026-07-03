@@ -170,8 +170,8 @@ static void handle_cmd(const char *buf)
     arg[j] = 0;
 
     if (strcmp(cmd, "help") == 0 || strcmp(cmd, "?") == 0) {
-        print_string("Noveris OS Shell\n");
-        print_string("----------------\n");
+        print_string("Noverix Shell\n");
+        print_string("-------------\n");
         print_string("help     Show this help\n");
         print_string("clear    Clear screen\n");
         print_string("echo     Print text or write file (echo text > file)\n");
@@ -218,7 +218,7 @@ static void handle_cmd(const char *buf)
         print_hex(n);
         print_string("\n");
     } else if (strcmp(cmd, "ver") == 0) {
-        print_string("Noveris OS v0.1\n");
+        print_string("Noverix v0.1\n");
     } else if (strcmp(cmd, "sleep") == 0) {
         unsigned int n = 0;
         int k = 0;
@@ -403,8 +403,8 @@ void kernel_main(void)
     debug_log("kernel_main started");
 
     clear_screen();
-    print_string("Noveris OS v0.1\n");
-    print_string("================\n");
+    print_string("Noverix v0.1\n");
+    print_string("============\n");
     if (!nvfs_is_mounted())
         print_string("No filesystem disk - file operations disabled\n");
     print_string("Type 'help' for commands.\n\n");
