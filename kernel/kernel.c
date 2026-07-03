@@ -86,6 +86,9 @@ static void readline(char *buf, int max)
     buf[0] = 0;
     int hist_pos = -1;
     char saved[LINE_BUF];
+    int start_x = get_cursor_x();
+    int start_y = get_cursor_y();
+
     while (len < max - 1) {
         char c = read_char_any();
         if (pos > len) pos = len;
@@ -98,9 +101,9 @@ static void readline(char *buf, int max)
             } else {
                 continue;
             }
-            for (int i = 0; i < pos; i++) print_string("\b");
+            set_cursor(start_x, start_y);
             for (int i = 0; i < len; i++) print_char(' ');
-            for (int i = 0; i < len; i++) print_string("\b");
+            set_cursor(start_x, start_y);
             strcpy(buf, history[hist_pos]);
             len = strlen(buf);
             pos = len;
@@ -108,9 +111,9 @@ static void readline(char *buf, int max)
         } else if (c == KEY_DOWN) {
             if (hist_pos == -1) continue;
             hist_pos--;
-            for (int i = 0; i < pos; i++) print_string("\b");
+            set_cursor(start_x, start_y);
             for (int i = 0; i < len; i++) print_char(' ');
-            for (int i = 0; i < len; i++) print_string("\b");
+            set_cursor(start_x, start_y);
             if (hist_pos >= 0) {
                 strcpy(buf, history[hist_pos]);
             } else {
@@ -130,25 +133,22 @@ static void readline(char *buf, int max)
             return;
         } else if (c == '\b') {
             if (pos > 0) {
-                int old_pos = pos, old_len = len, j;
-                for (j = pos - 1; j < len - 1; j++) buf[j] = buf[j + 1];
+                for (int i = pos - 1; i < len - 1; i++) buf[i] = buf[i + 1];
                 len--; pos--;
-                for (j = 0; j < old_pos; j++) print_string("\b");
-                for (j = 0; j < old_len; j++) print_char(' ');
-                for (j = 0; j < old_len; j++) print_string("\b");
-                for (j = 0; j < len; j++) print_char(buf[j]);
-                for (j = len; j > pos; j--) print_string("\b");
+                set_cursor(start_x, start_y);
+                for (int i = 0; i < len; i++) print_char(buf[i]);
+                print_char(' ');
+                int vp = start_x + pos;
+                set_cursor(vp % 80, start_y + vp / 80);
             }
-        } else {
-            int old_pos = pos, old_len = len, j;
-            for (j = len; j > pos; j--) buf[j] = buf[j - 1];
+        } else if (len < max - 2) {
+            for (int i = len; i > pos; i--) buf[i] = buf[i - 1];
             buf[pos] = c;
             len++; pos++;
-            for (j = 0; j < old_pos; j++) print_string("\b");
-            for (j = 0; j < old_len; j++) print_char(' ');
-            for (j = 0; j < old_len; j++) print_string("\b");
-            for (j = 0; j < len; j++) print_char(buf[j]);
-            for (j = len; j > pos; j--) print_string("\b");
+            set_cursor(start_x, start_y);
+            for (int i = 0; i < len; i++) print_char(buf[i]);
+            int vp = start_x + pos;
+            set_cursor(vp % 80, start_y + vp / 80);
         }
     }
     buf[len] = 0;

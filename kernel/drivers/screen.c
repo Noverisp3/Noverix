@@ -28,6 +28,8 @@ void init_screen(void)
 
 void set_cursor(int x, int y)
 {
+    cursor_x = x;
+    cursor_y = y;
     unsigned short pos = y * MAX_COLS + x;
     outb(0x3D4, 0x0F);
     outb(0x3D5, (unsigned char)(pos & 0xFF));
@@ -38,12 +40,11 @@ void set_cursor(int x, int y)
 static void scroll(void)
 {
     unsigned short *video = (unsigned short *)VIDEO_MEMORY;
-    int x, y;
-    for (y = 0; y < MAX_ROWS - 1; y++)
-        for (x = 0; x < MAX_COLS; x++)
-            video[y * MAX_COLS + x] = video[(y + 1) * MAX_COLS + x];
-    for (x = 0; x < MAX_COLS; x++)
-        video[(MAX_ROWS - 1) * MAX_COLS + x] = (WHITE_ON_BLACK << 8) | ' ';
+    int i;
+    for (i = 0; i < (MAX_ROWS - 1) * MAX_COLS; i++)
+        video[i] = video[i + MAX_COLS];
+    for (i = (MAX_ROWS - 1) * MAX_COLS; i < MAX_ROWS * MAX_COLS; i++)
+        video[i] = (WHITE_ON_BLACK << 8) | ' ';
     cursor_y = MAX_ROWS - 1;
 }
 
@@ -111,3 +112,6 @@ void print_int(unsigned int num)
     }
     print_string(buf + i);
 }
+
+int get_cursor_x(void) { return cursor_x; }
+int get_cursor_y(void) { return cursor_y; }
