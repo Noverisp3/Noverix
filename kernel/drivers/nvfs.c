@@ -3,6 +3,8 @@
 #include "../drivers/screen.h"
 #include "../drivers/serial.h"
 
+int nvfs_errno;
+
 static int mounted;
 static int nvfs_ch, nvfs_dr;
 static unsigned nvfs_cwd;
@@ -141,10 +143,11 @@ static int inode_alloc(unsigned char type)
                 inode.extents[e].start = 0;
                 inode.extents[e].count = 0;
             }
-            if (inode_write(i, &inode) != 0) return -1;
+            if (inode_write(i, &inode) != 0) { nvfs_errno = NVFS_ERR_IO; return -1; }
             return i;
         }
     }
+    nvfs_errno = NVFS_ERR_NO_INODE;
     return -1;
 }
 
@@ -220,8 +223,8 @@ static int extent_free(struct nvfs_inode *inode)
 static int dir_find(unsigned dir_inode, const char *name)
 {
     struct nvfs_inode inode;
-    if (inode_read(dir_inode, &inode) != 0) return -1;
-    if (inode.type != NVFS_TYPE_DIR) return -1;
+    if (inode_read(dir_inode, &inode) != 0) { nvfs_errno = NVFS_ERR_IO; return -1; }
+    if (inode.type != NVFS_TYPE_DIR) { nvfs_errno = NVFS_ERR_NOT_DIR; return -1; }
 
     unsigned char tmp[NVFS_SECTOR_SIZE];
     int name_len = 0;
@@ -230,7 +233,7 @@ static int dir_find(unsigned dir_inode, const char *name)
 
     for (unsigned i = 0; i < inode.extent_count; i++) {
         for (unsigned j = 0; j < inode.extents[i].count; j++) {
-            if (read_block(inode.extents[i].start + j, tmp) != 0) return -1;
+            if (read_block(inode.extents[i].start + j, tmp) != 0) { nvfs_errno = NVFS_ERR_IO; return -1; }
             int count = NVFS_SECTOR_SIZE / NVFS_DIRENT_SIZE;
             for (int e = 0; e < count; e++) {
                 struct nvfs_dirent *de = (struct nvfs_dirent *)(tmp + e * NVFS_DIRENT_SIZE);
@@ -243,14 +246,15 @@ static int dir_find(unsigned dir_inode, const char *name)
             }
         }
     }
+    nvfs_errno = NVFS_ERR_NOT_FOUND;
     return -1;
 }
 
 static int dir_add(unsigned dir_inode, const char *name, unsigned child_inode)
 {
     struct nvfs_inode inode;
-    if (inode_read(dir_inode, &inode) != 0) return -1;
-    if (inode.type != NVFS_TYPE_DIR) return -1;
+    if (inode_read(dir_inode, &inode) != 0) { nvfs_errno = NVFS_ERR_IO; return -1; }
+    if (inode.type != NVFS_TYPE_DIR) { nvfs_errno = NVFS_ERR_NOT_DIR; return -1; }
 
     unsigned char tmp[NVFS_SECTOR_SIZE];
     int name_len = 0;
@@ -265,42 +269,45 @@ static int dir_add(unsigned dir_inode, const char *name, unsigned child_inode)
 
     for (unsigned i = 0; i < inode.extent_count; i++) {
         for (unsigned j = 0; j < inode.extents[i].count; j++) {
-            if (read_block(inode.extents[i].start + j, tmp) != 0) return -1;
+            if (read_block(inode.extents[i].start + j, tmp) != 0) { nvfs_errno = NVFS_ERR_IO; return -1; }
             int count = NVFS_SECTOR_SIZE / NVFS_DIRENT_SIZE;
             for (int e = 0; e < count; e++) {
                 unsigned off = e * NVFS_DIRENT_SIZE;
                 if (*(unsigned int *)(tmp + off + 28) == 0) {
                     for (int k = 0; k < 32; k++) tmp[off + k] = nd[k];
-                    return write_block(inode.extents[i].start + j, tmp);
+                    int ret = write_block(inode.extents[i].start + j, tmp);
+                    if (ret != 0) nvfs_errno = NVFS_ERR_IO;
+                    return ret;
                 }
             }
         }
     }
 
-    unsigned new_block;
     int blk = bitmap_find(1);
-    if (blk < 0) return -1;
-    new_block = blk;
+    if (blk < 0) { nvfs_errno = NVFS_ERR_NO_SPACE; return -1; }
+    unsigned new_block = blk;
     bitmap_set(new_block, 1);
 
     for (unsigned k = 0; k < NVFS_SECTOR_SIZE; k++) tmp[k] = 0;
     for (int k = 0; k < 32; k++) tmp[k] = nd[k];
-    if (write_block(new_block, tmp) != 0) return -1;
+    if (write_block(new_block, tmp) != 0) { nvfs_errno = NVFS_ERR_IO; return -1; }
 
     unsigned ei = inode.extent_count;
-    if (ei >= NVFS_MAX_EXTENTS) { bitmap_set(new_block, 0); return -1; }
+    if (ei >= NVFS_MAX_EXTENTS) { bitmap_set(new_block, 0); nvfs_errno = NVFS_ERR_NO_SPACE; return -1; }
     inode.extents[ei].start = new_block;
     inode.extents[ei].count = 1;
     inode.extent_count = ei + 1;
     inode.size += NVFS_SECTOR_SIZE;
-    return inode_write(dir_inode, &inode);
+    int ret = inode_write(dir_inode, &inode);
+    if (ret != 0) nvfs_errno = NVFS_ERR_IO;
+    return ret;
 }
 
 static int dir_remove(unsigned dir_inode, const char *name)
 {
     struct nvfs_inode inode;
-    if (inode_read(dir_inode, &inode) != 0) return -1;
-    if (inode.type != NVFS_TYPE_DIR) return -1;
+    if (inode_read(dir_inode, &inode) != 0) { nvfs_errno = NVFS_ERR_IO; return -1; }
+    if (inode.type != NVFS_TYPE_DIR) { nvfs_errno = NVFS_ERR_NOT_DIR; return -1; }
 
     unsigned char tmp[NVFS_SECTOR_SIZE];
     int name_len = 0;
@@ -309,7 +316,7 @@ static int dir_remove(unsigned dir_inode, const char *name)
 
     for (unsigned i = 0; i < inode.extent_count; i++) {
         for (unsigned j = 0; j < inode.extents[i].count; j++) {
-            if (read_block(inode.extents[i].start + j, tmp) != 0) return -1;
+            if (read_block(inode.extents[i].start + j, tmp) != 0) { nvfs_errno = NVFS_ERR_IO; return -1; }
             int count = NVFS_SECTOR_SIZE / NVFS_DIRENT_SIZE;
             for (int e = 0; e < count; e++) {
                 struct nvfs_dirent *de = (struct nvfs_dirent *)(tmp + e * NVFS_DIRENT_SIZE);
@@ -320,11 +327,14 @@ static int dir_remove(unsigned dir_inode, const char *name)
                 if (match && de->name[name_len] != 0) match = 0;
                 if (match) {
                     de->inode = 0;
-                    return write_block(inode.extents[i].start + j, tmp);
+                    int ret = write_block(inode.extents[i].start + j, tmp);
+                    if (ret != 0) nvfs_errno = NVFS_ERR_IO;
+                    return ret;
                 }
             }
         }
     }
+    nvfs_errno = NVFS_ERR_NOT_FOUND;
     return -1;
 }
 
@@ -400,7 +410,7 @@ static int resolve_path(const char *path, unsigned *parent_inode, char *name)
         name[k] = 0;
         if (name[0] == '.' && name[1] == '.' && name[2] == 0) {
             int p = find_parent(cur);
-            if (p < 0) return -1;
+            if (p < 0) { nvfs_errno = NVFS_ERR_PATH; return -1; }
             *parent_inode = p;
             name[0] = 0;
             return 0;
@@ -425,16 +435,16 @@ static int resolve_path(const char *path, unsigned *parent_inode, char *name)
                 comp[k] = 0;
                 if (comp[0] == '.' && comp[1] == '.' && comp[2] == 0) {
                     int p = find_parent(cur);
-                    if (p < 0) return -1;
+                    if (p < 0) { nvfs_errno = NVFS_ERR_PATH; return -1; }
                     cur = p;
                 } else if (comp[0] == '.' && comp[1] == 0) {
                 } else {
                     to_upper(comp);
                     int inum = dir_find(cur, comp);
-                    if (inum < 0) return -1;
+                    if (inum < 0) { nvfs_errno = NVFS_ERR_NOT_FOUND; return -1; }
                     struct nvfs_inode inode;
-                    if (inode_read(inum, &inode) != 0) return -1;
-                    if (inode.type != NVFS_TYPE_DIR) return -1;
+                    if (inode_read(inum, &inode) != 0) { nvfs_errno = NVFS_ERR_IO; return -1; }
+                    if (inode.type != NVFS_TYPE_DIR) { nvfs_errno = NVFS_ERR_NOT_DIR; return -1; }
                     cur = inum;
                 }
             }
@@ -447,7 +457,7 @@ static int resolve_path(const char *path, unsigned *parent_inode, char *name)
     name[k] = 0;
     if (name[0] == '.' && name[1] == '.' && name[2] == 0) {
         int p = find_parent(cur);
-        if (p < 0) return -1;
+        if (p < 0) { nvfs_errno = NVFS_ERR_PATH; return -1; }
         *parent_inode = p;
         name[0] = 0;
         return 0;
@@ -464,7 +474,7 @@ static int resolve_path(const char *path, unsigned *parent_inode, char *name)
 
 int nvfs_mount(void)
 {
-    if (find_drive() != 0) return -1;
+    if (find_drive() != 0) { nvfs_errno = NVFS_ERR_IO; return -1; }
 
     unsigned char buf[NVFS_SECTOR_SIZE];
     unsigned offsets[] = {0, 2880};
@@ -488,7 +498,7 @@ int nvfs_mount(void)
 
 int nvfs_list(const char *path)
 {
-    if (!mounted) return -1;
+    if (!mounted) { nvfs_errno = NVFS_ERR_NO_MOUNT; return -1; }
     unsigned dir_inode = nvfs_cwd;
 
     if (path && path[0]) {
@@ -542,36 +552,36 @@ int nvfs_list(const char *path)
 
 int nvfs_read(const char *path, void *out, unsigned max)
 {
-    if (!mounted) return -1;
+    if (!mounted) { nvfs_errno = NVFS_ERR_NO_MOUNT; return -1; }
     char name[NVFS_MAX_NAME + 1];
     unsigned parent;
     if (resolve_path(path, &parent, name) < 0) return -1;
-    if (!name[0]) return -1;
+    if (!name[0]) { nvfs_errno = NVFS_ERR_PATH; return -1; }
 
     int inum = dir_find(parent, name);
     if (inum < 0) return -1;
 
     struct nvfs_inode inode;
-    if (inode_read(inum, &inode) != 0) return -1;
-    if (inode.type != NVFS_TYPE_FILE) return -1;
+    if (inode_read(inum, &inode) != 0) { nvfs_errno = NVFS_ERR_IO; return -1; }
+    if (inode.type != NVFS_TYPE_FILE) { nvfs_errno = NVFS_ERR_NOT_FILE; return -1; }
 
     return extent_read(&inode, (unsigned char *)out, max);
 }
 
 int nvfs_write(const char *path, const void *data, unsigned size)
 {
-    if (!mounted) return -1;
+    if (!mounted) { nvfs_errno = NVFS_ERR_NO_MOUNT; return -1; }
     char name[NVFS_MAX_NAME + 1];
     unsigned parent;
     if (resolve_path(path, &parent, name) < 0) return -1;
-    if (!name[0]) return -1;
+    if (!name[0]) { nvfs_errno = NVFS_ERR_PATH; return -1; }
 
     int inum = dir_find(parent, name);
     if (inum >= 0) {
         struct nvfs_inode inode;
-        if (inode_read(inum, &inode) != 0) return -1;
+        if (inode_read(inum, &inode) != 0) { nvfs_errno = NVFS_ERR_IO; return -1; }
         extent_free(&inode);
-        if (extent_write(&inode, (const unsigned char *)data, size) != 0) return -1;
+        if (extent_write(&inode, (const unsigned char *)data, size) != 0) { nvfs_errno = NVFS_ERR_NO_SPACE; return -1; }
         return inode_write(inum, &inode);
     }
 
@@ -582,38 +592,38 @@ int nvfs_write(const char *path, const void *data, unsigned size)
     inode.size = 0;
     inode.type = NVFS_TYPE_FILE;
     inode.extent_count = 0;
-    if (extent_write(&inode, (const unsigned char *)data, size) != 0) { inode_free(inum); return -1; }
-    if (inode_write(inum, &inode) != 0) { inode_free(inum); return -1; }
+    if (extent_write(&inode, (const unsigned char *)data, size) != 0) { inode_free(inum); nvfs_errno = NVFS_ERR_NO_SPACE; return -1; }
+    if (inode_write(inum, &inode) != 0) { inode_free(inum); nvfs_errno = NVFS_ERR_IO; return -1; }
     if (dir_add(parent, name, inum) != 0) { inode_free(inum); return -1; }
     return 0;
 }
 
 int nvfs_delete(const char *path)
 {
-    if (!mounted) return -1;
+    if (!mounted) { nvfs_errno = NVFS_ERR_NO_MOUNT; return -1; }
     char name[NVFS_MAX_NAME + 1];
     unsigned parent;
     if (resolve_path(path, &parent, name) < 0) return -1;
-    if (!name[0]) return -1;
+    if (!name[0]) { nvfs_errno = NVFS_ERR_PATH; return -1; }
 
     int inum = dir_find(parent, name);
     if (inum < 0) return -1;
 
     struct nvfs_inode inode;
-    if (inode_read(inum, &inode) != 0) return -1;
-    if (inode.type != NVFS_TYPE_FILE) return -1;
+    if (inode_read(inum, &inode) != 0) { nvfs_errno = NVFS_ERR_IO; return -1; }
+    if (inode.type != NVFS_TYPE_FILE) { nvfs_errno = NVFS_ERR_NOT_FILE; return -1; }
 
-    if (inode_free(inum) != 0) return -1;
+    if (inode_free(inum) != 0) { nvfs_errno = NVFS_ERR_IO; return -1; }
     return dir_remove(parent, name);
 }
 
 int nvfs_mkdir(const char *path)
 {
-    if (!mounted) return -1;
+    if (!mounted) { nvfs_errno = NVFS_ERR_NO_MOUNT; return -1; }
     char name[NVFS_MAX_NAME + 1];
     unsigned parent;
     if (resolve_path(path, &parent, name) < 0) return -1;
-    if (!name[0]) return -1;
+    if (!name[0]) { nvfs_errno = NVFS_ERR_PATH; return -1; }
 
     int inum = inode_alloc(NVFS_TYPE_DIR);
     if (inum < 0) return -1;
@@ -622,34 +632,34 @@ int nvfs_mkdir(const char *path)
     inode.size = 0;
     inode.type = NVFS_TYPE_DIR;
     inode.extent_count = 0;
-    if (inode_write(inum, &inode) != 0) { inode_free(inum); return -1; }
+    if (inode_write(inum, &inode) != 0) { inode_free(inum); nvfs_errno = NVFS_ERR_IO; return -1; }
     if (dir_add(parent, name, inum) != 0) { inode_free(inum); return -1; }
     return 0;
 }
 
 int nvfs_rmdir(const char *path)
 {
-    if (!mounted) return -1;
+    if (!mounted) { nvfs_errno = NVFS_ERR_NO_MOUNT; return -1; }
     char name[NVFS_MAX_NAME + 1];
     unsigned parent;
     if (resolve_path(path, &parent, name) < 0) return -1;
-    if (!name[0]) return -1;
+    if (!name[0]) { nvfs_errno = NVFS_ERR_PATH; return -1; }
 
     int inum = dir_find(parent, name);
     if (inum < 0) return -1;
 
     struct nvfs_inode inode;
-    if (inode_read(inum, &inode) != 0) return -1;
-    if (inode.type != NVFS_TYPE_DIR) return -1;
-    if (!dir_empty(inum)) return -1;
+    if (inode_read(inum, &inode) != 0) { nvfs_errno = NVFS_ERR_IO; return -1; }
+    if (inode.type != NVFS_TYPE_DIR) { nvfs_errno = NVFS_ERR_NOT_DIR; return -1; }
+    if (!dir_empty(inum)) { nvfs_errno = NVFS_ERR_DIR_BUSY; return -1; }
 
-    if (inode_free(inum) != 0) return -1;
+    if (inode_free(inum) != 0) { nvfs_errno = NVFS_ERR_IO; return -1; }
     return dir_remove(parent, name);
 }
 
 int nvfs_chdir(const char *path, unsigned *out_inode)
 {
-    if (!mounted) return -1;
+    if (!mounted) { nvfs_errno = NVFS_ERR_NO_MOUNT; return -1; }
     if (!path || !path[0]) { nvfs_cwd = NVFS_ROOT_INODE; if (out_inode) *out_inode = NVFS_ROOT_INODE; return 0; }
 
     char name[NVFS_MAX_NAME + 1];
@@ -661,8 +671,8 @@ int nvfs_chdir(const char *path, unsigned *out_inode)
     if (inum < 0) return -1;
 
     struct nvfs_inode inode;
-    if (inode_read(inum, &inode) != 0) return -1;
-    if (inode.type != NVFS_TYPE_DIR) return -1;
+    if (inode_read(inum, &inode) != 0) { nvfs_errno = NVFS_ERR_IO; return -1; }
+    if (inode.type != NVFS_TYPE_DIR) { nvfs_errno = NVFS_ERR_NOT_DIR; return -1; }
 
     nvfs_cwd = inum;
     if (out_inode) *out_inode = inum;
@@ -732,5 +742,54 @@ int nvfs_path_string(unsigned inum, char *buf, unsigned size)
         if (i > 0 && pos < (int)size - 1) buf[pos++] = '/';
     }
     buf[pos] = 0;
+    return 0;
+}
+
+const char *nvfs_strerror(int err)
+{
+    switch (err) {
+        case NVFS_ERR_NOT_FOUND: return "Not found";
+        case NVFS_ERR_NOT_DIR:   return "Not a directory";
+        case NVFS_ERR_NOT_FILE:  return "Not a file";
+        case NVFS_ERR_DIR_BUSY:  return "Directory not empty";
+        case NVFS_ERR_NO_SPACE:  return "Disk full";
+        case NVFS_ERR_NO_INODE:  return "Out of inodes";
+        case NVFS_ERR_EXISTS:    return "Already exists";
+        case NVFS_ERR_IO:        return "I/O error";
+        case NVFS_ERR_NO_MOUNT:  return "No disk";
+        case NVFS_ERR_PATH:      return "Bad path";
+        default:                 return "Unknown error";
+    }
+}
+
+int nvfs_append(const char *path, const void *data, unsigned size)
+{
+    if (!mounted) { nvfs_errno = NVFS_ERR_NO_MOUNT; return -1; }
+
+    char name[NVFS_MAX_NAME + 1];
+    unsigned parent;
+    if (resolve_path(path, &parent, name) < 0) return -1;
+    if (!name[0]) { nvfs_errno = NVFS_ERR_PATH; return -1; }
+
+    int inum = dir_find(parent, name);
+    if (inum < 0) return -1;
+
+    struct nvfs_inode inode;
+    if (inode_read(inum, &inode) != 0) { nvfs_errno = NVFS_ERR_IO; return -1; }
+    if (inode.type != NVFS_TYPE_FILE) { nvfs_errno = NVFS_ERR_NOT_FILE; return -1; }
+
+    char tmp[4096];
+    unsigned old = inode.size > 4096 ? 4096 : inode.size;
+    unsigned remain = 4096 - old;
+    unsigned add = size > remain ? remain : size;
+
+    if (extent_read(&inode, (unsigned char *)tmp, old) < 0) { nvfs_errno = NVFS_ERR_IO; return -1; }
+    const unsigned char *src = (const unsigned char *)data;
+    for (unsigned i = 0; i < add; i++) tmp[old + i] = src[i];
+
+    extent_free(&inode);
+    inode.extent_count = 0;
+    if (extent_write(&inode, (const unsigned char *)tmp, old + add) != 0) { nvfs_errno = NVFS_ERR_NO_SPACE; return -1; }
+    if (inode_write(inum, &inode) != 0) { nvfs_errno = NVFS_ERR_IO; return -1; }
     return 0;
 }

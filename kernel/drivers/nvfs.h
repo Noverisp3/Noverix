@@ -14,6 +14,19 @@
 #define NVFS_TYPE_DIR  2
 #define NVFS_STATE_CLEAN 0
 
+#define NVFS_ERR_NOT_FOUND  1
+#define NVFS_ERR_NOT_DIR    2
+#define NVFS_ERR_NOT_FILE   3
+#define NVFS_ERR_DIR_BUSY   4
+#define NVFS_ERR_NO_SPACE   5
+#define NVFS_ERR_NO_INODE   6
+#define NVFS_ERR_EXISTS     7
+#define NVFS_ERR_IO         8
+#define NVFS_ERR_NO_MOUNT   9
+#define NVFS_ERR_PATH       10
+
+extern int nvfs_errno;
+
 struct __attribute__((packed)) nvfs_extent {
     unsigned int start;
     unsigned int count;
@@ -44,5 +57,7 @@ int nvfs_chdir(const char *path, unsigned int *out_inode);
 unsigned int nvfs_get_cwd(void);
 int nvfs_path_string(unsigned int inum, char *buf, unsigned int size);
 int nvfs_is_mounted(void);
+int nvfs_append(const char *path, const void *data, unsigned int size);
+const char *nvfs_strerror(int err);
 
 #endif

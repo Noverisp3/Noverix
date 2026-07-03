@@ -189,18 +189,27 @@ static void handle_cmd(const char *buf)
         print_string("reboot   Reboot system\n");
         print_string("shutdown Power off\n");
     } else if (strcmp(cmd, "echo") == 0) {
+        int is_append = 0;
         char *redir = arg;
         while (*redir && *redir != '>') redir++;
         if (*redir == '>') {
+            if (*(redir + 1) == '>') {
+                is_append = 1;
+                *(redir + 1) = 0;
+            }
             *redir = 0;
             char *content = arg;
-            char *fname = redir + 1;
+            char *fname = redir + 1 + is_append;
             while (*fname == ' ') fname++;
             if (fname[0]) {
-                if (nvfs_write(fname, content, strlen(content)) == 0)
+                int r = is_append ? nvfs_append(fname, content, strlen(content))
+                                  : nvfs_write(fname, content, strlen(content));
+                if (r == 0)
                     print_string("OK\n");
-                else
-                    print_string("FAIL\n");
+                else {
+                    print_string(nvfs_strerror(nvfs_errno));
+                    print_string("\n");
+                }
             }
         } else {
             if (arg[0]) print_string(arg);
@@ -262,7 +271,8 @@ static void handle_cmd(const char *buf)
             } else if (n == 0) {
                 print_string("(empty)\n");
             } else {
-                print_string("FAIL\n");
+                print_string(nvfs_strerror(nvfs_errno));
+                print_string("\n");
             }
         } else {
             print_string("Usage: cat <file>\n");
@@ -270,26 +280,28 @@ static void handle_cmd(const char *buf)
     } else if (strcmp(cmd, "ls") == 0) {
         nvfs_list(arg[0] ? arg : "");
     } else if (strcmp(cmd, "cd") == 0) {
-        if (nvfs_chdir(arg[0] ? arg : "", 0) != 0)
-            print_string("Not found\n");
+        if (nvfs_chdir(arg[0] ? arg : "", 0) != 0) {
+            print_string(nvfs_strerror(nvfs_errno));
+            print_string("\n");
+        }
     } else if (strcmp(cmd, "mkdir") == 0) {
         if (arg[0]) {
             if (nvfs_mkdir(arg) == 0) print_string("OK\n");
-            else print_string("FAIL\n");
+            else { print_string(nvfs_strerror(nvfs_errno)); print_string("\n"); }
         } else {
             print_string("Usage: mkdir <path>\n");
         }
     } else if (strcmp(cmd, "rmdir") == 0) {
         if (arg[0]) {
             if (nvfs_rmdir(arg) == 0) print_string("OK\n");
-            else print_string("FAIL\n");
+            else { print_string(nvfs_strerror(nvfs_errno)); print_string("\n"); }
         } else {
             print_string("Usage: rmdir <path>\n");
         }
     } else if (strcmp(cmd, "rm") == 0) {
         if (arg[0]) {
             if (nvfs_delete(arg) == 0) print_string("OK\n");
-            else print_string("FAIL\n");
+            else { print_string(nvfs_strerror(nvfs_errno)); print_string("\n"); }
         } else {
             print_string("Usage: rm <file>\n");
         }
