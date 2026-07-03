@@ -271,9 +271,15 @@ static void irq_remap(void)
 
 void register_interrupt_handler(int irq, interrupt_handler_t handler)
 {
-    __asm__ volatile ("cli");
-    interrupt_handlers[irq] = handler;
-    __asm__ volatile ("sti");
+    __asm__ volatile (
+        "pushf\n\t"
+        "cli\n\t"
+        "movl %1, %0\n\t"
+        "popf\n\t"
+        : "=m" (interrupt_handlers[irq])
+        : "r" (handler)
+        : "memory"
+    );
 }
 
 void init_idt(void)
