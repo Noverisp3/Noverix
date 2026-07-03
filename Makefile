@@ -27,7 +27,7 @@ KERNEL_OBJS = \
 	$(BUILD_DIR)/paging.o \
 	$(BUILD_DIR)/heap.o
 
-.PHONY: all clean run run-qemu
+.PHONY: all clean run run-qemu iso
 
 all: $(BUILD_DIR)/os-image.bin
 
@@ -59,13 +59,34 @@ $(BUILD_DIR)/os-image.bin: $(BUILD_DIR)/bootloader.bin $(BUILD_DIR)/kernel.bin |
 	truncate -s 1474560 $@
 
 clean:
-	rm -rf $(BUILD_DIR) nvfs_disk.img
+	rm -rf $(BUILD_DIR) nvfs_disk.img os-image.iso combined.img
 
 nvfs_disk.img: tools/mknvfs.py
 	python3 tools/mknvfs.py $@
 
+$(BUILD_DIR)/os-image.iso: $(BUILD_DIR)/os-image.bin
+	xorriso -as mkisofs -b os-image.bin -no-emul-boot -boot-load-size 4 \
+	  -o $@ $(BUILD_DIR)
+
+combined.img: $(BUILD_DIR)/os-image.bin nvfs_disk.img
+	cp $(BUILD_DIR)/os-image.bin $@
+	cat nvfs_disk.img >> $@
+	@echo "Created $@ — dd to USB: sudo dd if=$@ of=/dev/sdX bs=512"
+
 run-qemu: $(BUILD_DIR)/os-image.bin nvfs_disk.img
 	qemu-system-x86_64 -boot order=a -drive format=raw,file=$<,if=floppy -drive file=nvfs_disk.img,format=raw,if=none,id=ata0 -device ide-hd,drive=ata0 -m 32
 
+run-qemu-iso: $(BUILD_DIR)/os-image.iso nvfs_disk.img
+	qemu-system-x86_64 -boot order=d -cdrom $(BUILD_DIR)/os-image.iso \
+	  -drive file=nvfs_disk.img,format=raw,if=none,id=ata0 \
+	  -device ide-hd,drive=ata0 -m 32
+
+run-qemu-combined: combined.img
+	qemu-system-x86_64 -boot order=c \
+	  -drive file=combined.img,format=raw,if=none,id=ata0 \
+	  -device ide-hd,drive=ata0 -m 32
+
 run: $(BUILD_DIR)/os-image.bin
 	bochs -q -f bochsrc.bxrc
+
+iso: $(BUILD_DIR)/os-image.iso

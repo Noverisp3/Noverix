@@ -12,6 +12,7 @@ static unsigned sb_inode_start;
 static unsigned sb_inode_count;
 static unsigned sb_bitmap_start;
 static unsigned sb_bitmap_sectors;
+static unsigned nvfs_offset;
 
 static int find_drive(void)
 {
@@ -33,19 +34,19 @@ static int write_sector(unsigned lba, const unsigned char *buf)
 
 static int read_block(unsigned block, unsigned char *buf)
 {
-    return read_sector(sb_data_start + block, buf);
+    return read_sector(nvfs_offset + sb_data_start + block, buf);
 }
 
 static int write_block(unsigned block, const unsigned char *buf)
 {
-    return write_sector(sb_data_start + block, buf);
+    return write_sector(nvfs_offset + sb_data_start + block, buf);
 }
 
 static int bitmap_test(unsigned block)
 {
     unsigned char buf[NVFS_SECTOR_SIZE];
     unsigned bits_per_sec = NVFS_SECTOR_SIZE * 8;
-    unsigned sec = sb_bitmap_start + block / bits_per_sec;
+    unsigned sec = nvfs_offset + sb_bitmap_start + block / bits_per_sec;
     unsigned bit = block % bits_per_sec;
     if (read_sector(sec, buf) != 0) return -1;
     return (buf[bit / 8] >> (bit % 8)) & 1;
@@ -55,7 +56,7 @@ static int bitmap_set(unsigned block, int used)
 {
     unsigned char buf[NVFS_SECTOR_SIZE];
     unsigned bits_per_sec = NVFS_SECTOR_SIZE * 8;
-    unsigned sec = sb_bitmap_start + block / bits_per_sec;
+    unsigned sec = nvfs_offset + sb_bitmap_start + block / bits_per_sec;
     unsigned bit = block % bits_per_sec;
     if (read_sector(sec, buf) != 0) return -1;
     if (used) buf[bit / 8] |= (1 << (bit % 8));
@@ -70,7 +71,7 @@ static int bitmap_find(unsigned count)
     unsigned total_bits = sb_bitmap_sectors * bits_per_sec;
 
     for (unsigned s = 0; s < sb_bitmap_sectors; s++) {
-        if (read_sector(sb_bitmap_start + s, buf) != 0) return -1;
+        if (read_sector(nvfs_offset + sb_bitmap_start + s, buf) != 0) return -1;
         unsigned base = s * bits_per_sec;
         for (unsigned b = 0; b < bits_per_sec && base + b < total_bits; b++) {
             if (buf[b / 8] & (1 << (b % 8))) continue;
@@ -90,7 +91,7 @@ static int bitmap_find(unsigned count)
 static int inode_read(unsigned inum, struct nvfs_inode *inode)
 {
     unsigned char buf[NVFS_SECTOR_SIZE];
-    unsigned sec = sb_inode_start + inum * NVFS_INODE_SIZE / NVFS_SECTOR_SIZE;
+    unsigned sec = nvfs_offset + sb_inode_start + inum * NVFS_INODE_SIZE / NVFS_SECTOR_SIZE;
     unsigned off = (inum * NVFS_INODE_SIZE) % NVFS_SECTOR_SIZE;
     if (read_sector(sec, buf) != 0) return -1;
     unsigned char *p = buf + off;
@@ -110,7 +111,7 @@ static int inode_read(unsigned inum, struct nvfs_inode *inode)
 static int inode_write(unsigned inum, const struct nvfs_inode *inode)
 {
     unsigned char buf[NVFS_SECTOR_SIZE];
-    unsigned sec = sb_inode_start + inum * NVFS_INODE_SIZE / NVFS_SECTOR_SIZE;
+    unsigned sec = nvfs_offset + sb_inode_start + inum * NVFS_INODE_SIZE / NVFS_SECTOR_SIZE;
     unsigned off = (inum * NVFS_INODE_SIZE) % NVFS_SECTOR_SIZE;
     if (read_sector(sec, buf) != 0) return -1;
     unsigned char *p = buf + off;
@@ -466,19 +467,23 @@ int nvfs_mount(void)
     if (find_drive() != 0) return -1;
 
     unsigned char buf[NVFS_SECTOR_SIZE];
-    if (read_sector(1, buf) != 0) return -1;
-    if (buf[0] != 'N' || buf[1] != 'V' || buf[2] != 'F' || buf[3] != 'S')
-        return -1;
+    unsigned offsets[] = {0, 2880};
 
-    sb_bitmap_start = *(unsigned int *)(buf + 16);
-    sb_bitmap_sectors = *(unsigned int *)(buf + 20);
-    sb_inode_start = *(unsigned int *)(buf + 24);
-    sb_inode_count = *(unsigned int *)(buf + 28);
-    sb_data_start = *(unsigned int *)(buf + 32);
-
-    nvfs_cwd = NVFS_ROOT_INODE;
-    mounted = 1;
-    return 0;
+    for (unsigned i = 0; i < 2; i++) {
+        nvfs_offset = offsets[i];
+        if (read_sector(nvfs_offset + 1, buf) != 0) continue;
+        if (buf[0] == 'N' && buf[1] == 'V' && buf[2] == 'F' && buf[3] == 'S') {
+            sb_bitmap_start = *(unsigned int *)(buf + 16);
+            sb_bitmap_sectors = *(unsigned int *)(buf + 20);
+            sb_inode_start = *(unsigned int *)(buf + 24);
+            sb_inode_count = *(unsigned int *)(buf + 28);
+            sb_data_start = *(unsigned int *)(buf + 32);
+            nvfs_cwd = NVFS_ROOT_INODE;
+            mounted = 1;
+            return 0;
+        }
+    }
+    return -1;
 }
 
 int nvfs_list(const char *path)
@@ -667,6 +672,11 @@ int nvfs_chdir(const char *path, unsigned *out_inode)
 unsigned nvfs_get_cwd(void)
 {
     return nvfs_cwd;
+}
+
+int nvfs_is_mounted(void)
+{
+    return mounted;
 }
 
 int nvfs_path_string(unsigned inum, char *buf, unsigned size)

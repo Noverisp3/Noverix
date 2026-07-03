@@ -405,6 +405,8 @@ void kernel_main(void)
     clear_screen();
     print_string("Noveris OS v0.1\n");
     print_string("================\n");
+    if (!nvfs_is_mounted())
+        print_string("No filesystem disk - file operations disabled\n");
     print_string("Type 'help' for commands.\n\n");
 
     while (1) {

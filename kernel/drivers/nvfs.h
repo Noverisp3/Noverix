@@ -43,5 +43,6 @@ int nvfs_rmdir(const char *path);
 int nvfs_chdir(const char *path, unsigned int *out_inode);
 unsigned int nvfs_get_cwd(void);
 int nvfs_path_string(unsigned int inum, char *buf, unsigned int size);
+int nvfs_is_mounted(void);
 
 #endif
