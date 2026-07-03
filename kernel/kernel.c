@@ -178,6 +178,9 @@ static void execute_cmd(const char *cmd, char *arg)
         print_string("reboot   Reboot system\n");
         print_string("shutdown Power off\n");
         print_string("exec     Run ELF executable\n");
+        print_string("heap     Dump heap allocator state\n");
+        print_string("mem      Show physical memory info\n");
+        print_string("pages    Show page directory/table info\n");
         print_string("|        Pipe: cmd1 | cmd2 (output of cmd1 goes to cmd2)\n");
     } else if (lib_strcmp(cmd, "echo") == 0) {
         int is_append = 0;
@@ -333,6 +336,20 @@ static void execute_cmd(const char *cmd, char *arg)
         } else {
             print_string("Usage: exec <file>\n");
         }
+    } else if (lib_strcmp(cmd, "heap") == 0) {
+        heap_walk();
+    } else if (lib_strcmp(cmd, "mem") == 0) {
+        unsigned total = MAX_MEMORY;
+        unsigned used = total / FRAME_SIZE - get_free_frame_count();
+        unsigned free_frames = get_free_frame_count();
+        print_string("Total memory: "); print_int(total / 1024); print_string(" KB\n");
+        print_string("Frame size:   "); print_int(FRAME_SIZE); print_string(" bytes\n");
+        print_string("Total frames: "); print_int(total / FRAME_SIZE); print_string("\n");
+        print_string("Used frames:  "); print_int(used); print_string("\n");
+        print_string("Free frames:  "); print_int(free_frames); print_string("\n");
+        print_string("Free memory:  "); print_int(free_frames * FRAME_SIZE / 1024); print_string(" KB\n");
+    } else if (lib_strcmp(cmd, "pages") == 0) {
+        dump_page_info();
     } else if (cmd[0]) {
         print_string("Unknown command: ");
         print_string(cmd);

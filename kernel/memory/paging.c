@@ -126,3 +126,45 @@ unsigned int read_cr0(void)
     __asm__ volatile ("mov %%cr0, %0" : "=r" (val));
     return val;
 }
+
+void dump_page_info(void)
+{
+    unsigned int pd_phys = read_cr3();
+    serial_write_string("[pages] Page Dir at ");
+    serial_write_hex(pd_phys);
+    serial_write_string("\n");
+
+    int total_pdes = 0, total_ptes = 0;
+    for (int pde_i = 0; pde_i < 1024; pde_i++)
+    {
+        if (!(page_dir[pde_i] & PAGE_PRESENT))
+            continue;
+        total_pdes++;
+        unsigned int pt_phys = page_dir[pde_i] & 0xFFFFF000;
+        page_table_entry_t *table = (page_table_entry_t *)pt_phys;
+        int ptes = 0;
+        for (int pte_i = 0; pte_i < 1024; pte_i++)
+        {
+            if (!(table[pte_i] & PAGE_PRESENT))
+                continue;
+            ptes++;
+            total_ptes++;
+        }
+        serial_write_string("  PDE[");
+        serial_write_int(pde_i);
+        serial_write_string("] PT=");
+        serial_write_hex(pt_phys);
+        serial_write_string(" (");
+        serial_write_int(ptes);
+        serial_write_string(" PTEs, virt 0x");
+        serial_write_hex(pde_i << 22);
+        serial_write_string(")\n");
+    }
+    serial_write_string("  Total: ");
+    serial_write_int(total_pdes);
+    serial_write_string(" PDEs, ");
+    serial_write_int(total_ptes);
+    serial_write_string(" PTEs (");
+    serial_write_int(total_ptes * 4);
+    serial_write_string(" KB mapped)\n");
+}
