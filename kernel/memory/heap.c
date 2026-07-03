@@ -27,26 +27,47 @@ void heap_init(void)
 
 void *malloc(unsigned int size)
 {
-    if (size == 0) return 0;
+    if (size == 0)
+        return 0;
+
+    if (size > HEAP_SIZE)
+    {
+        serial_write_string("[heap] malloc: requested size too large\n");
+        return 0;
+    }
+
     size = (size + ALIGN - 1) & ~(ALIGN - 1);
     unsigned int need = HEADER_SIZE + size + FOOTER_SIZE;
-    if (need < MIN_BLOCK) need = MIN_BLOCK;
+    if (need < MIN_BLOCK)
+        need = MIN_BLOCK;
 
     unsigned int addr = HEAP_START;
-    while (addr < HEAP_START + HEAP_SIZE) {
+    while (addr < HEAP_START + HEAP_SIZE)
+    {
         unsigned int *hdr = (unsigned int *)addr;
         unsigned int block_size = *hdr & ~1;
         int is_free = !(*hdr & 1);
 
-        if (is_free && block_size >= need) {
+        if (block_size == 0 || block_size > HEAP_SIZE)
+        {
+            serial_write_string("[heap] malloc: CORRUPTED block size found! Resetting heap...\n");
+            heap_init();
+            return 0;
+        }
+
+        if (is_free && block_size >= need)
+        {
             unsigned int remaining = block_size - need;
-            if (remaining >= MIN_BLOCK) {
+            if (remaining >= MIN_BLOCK)
+            {
                 *hdr = need | 1;
                 set_footer(addr, need);
                 unsigned int *next_hdr = (unsigned int *)(addr + need);
                 *next_hdr = remaining;
                 set_footer(addr + need, remaining);
-            } else {
+            }
+            else
+            {
                 need = block_size;
                 *hdr = need | 1;
                 set_footer(addr, need);
@@ -61,15 +82,24 @@ void *malloc(unsigned int size)
 
 void free(void *ptr)
 {
-    if (!ptr) return;
+    if (!ptr)
+        return;
     unsigned int addr = (unsigned int)ptr - HEADER_SIZE;
+
+    if (addr < HEAP_START || addr >= HEAP_START + HEAP_SIZE)
+    {
+        serial_write_string("[heap] free: invalid pointer outside heap boundaries\n");
+        return;
+    }
+
     unsigned int *hdr = (unsigned int *)addr;
     unsigned int size = *hdr & ~1;
 
-    if (!(*hdr & 1)) {
+    if (!(*hdr & 1))
+    {
         serial_write_string("[heap] double free at ");
         serial_write_hex(addr);
-        serial_write_char('\n');
+        serial_write_string("\n");
         return;
     }
 
@@ -77,23 +107,37 @@ void free(void *ptr)
     set_footer(addr, size);
 
     unsigned int next_addr = addr + size;
-    if (next_addr < HEAP_START + HEAP_SIZE) {
+    if (next_addr >= HEAP_START && next_addr < HEAP_START + HEAP_SIZE)
+    {
         unsigned int *next_hdr = (unsigned int *)next_addr;
-        if (!(*next_hdr & 1)) {
-            size += *next_hdr;
+        unsigned int next_size = *next_hdr & ~1;
+
+        if (next_size >= MIN_BLOCK && next_size < HEAP_SIZE && !(*next_hdr & 1))
+        {
+            size += next_size;
             *hdr = size;
             set_footer(addr, size);
         }
     }
 
-    if (addr > HEAP_START && addr - FOOTER_SIZE >= HEAP_START) {
+    if (addr > HEAP_START + MIN_BLOCK)
+    {
         unsigned int prev_size = *(unsigned int *)(addr - FOOTER_SIZE);
-        unsigned int prev_addr = addr - prev_size;
-        unsigned int *prev_hdr = (unsigned int *)prev_addr;
-        if (!(*prev_hdr & 1)) {
-            size += prev_size;
-            *prev_hdr = size;
-            set_footer(prev_addr, size);
+
+        if (prev_size >= MIN_BLOCK && prev_size < HEAP_SIZE)
+        {
+            unsigned int prev_addr = addr - prev_size;
+
+            if (prev_addr >= HEAP_START && prev_addr < addr)
+            {
+                unsigned int *prev_hdr = (unsigned int *)prev_addr;
+                if (!(*prev_hdr & 1))
+                {
+                    size += prev_size;
+                    *prev_hdr = size;
+                    set_footer(prev_addr, size);
+                }
+            }
         }
     }
 }

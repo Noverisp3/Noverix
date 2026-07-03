@@ -18,7 +18,8 @@ A minimal x86 hobby operating system built from scratch. Boots from real mode in
 | **Memory** | Page Frame Allocator (bitmap-based, 1 bit per 4KB frame, 8192 frames for 32MB). |
 | **Paging** | 32-bit x86 two-level paging (PD + PT), identity map 0–32MB, `map_page()` for custom mappings, CR0.PG enabled. |
 | **Heap** | `malloc`/`free` allocator at 0x800000 (2MB), boundary-tag first-fit, split/coalesce, serial OOM logging. |
-| **Shell** | Command history (UP/DOWN), inline editing (LEFT/RIGHT/Backspace), Ctrl+C to cancel line, path navigation with `cd`, `cd ..`, `cd ./..`, `ls <path>`, `cat`, `echo > file`, `echo >> file` (append), `|` pipe (e.g. `cmd1 | cmd2`), `mkdir`, `rmdir`, `rm`. Specific error messages (e.g. "Not found", "Directory not empty") instead of generic "FAIL". Dynamic prompt shows current directory path (e.g. `/MYDIR$`). |
+| **ELF loader** | Loads and executes ELF binaries from NVFS into user-space, basic syscall interface via software interrupt. |
+| **Shell** | Command history (UP/DOWN), inline editing (LEFT/RIGHT/Backspace), Ctrl+C to cancel line, path navigation with `cd`, `cd ..`, `cd ./..`, `ls <path>`, `cat`, `echo > file`, `echo >> file` (append), `|` pipe (e.g. `cmd1 | cmd2`), `exec` for running ELF executables, `mkdir`, `rmdir`, `rm`. Specific error messages (e.g. "Not found", "Directory not empty") instead of generic "FAIL". Dynamic prompt shows current directory path (e.g. `/MYDIR$`). |
 
 ## Requirements
 
@@ -144,6 +145,7 @@ shutdown Power off
 | `crash` | `crash` | Trigger `ud2` exception with register dump |
 | `reboot` | `reboot` | Reset system via keyboard controller (port 0x64, 0xFE) |
 | `shutdown`, `poweroff` | `shutdown` | Power off via ACPI ports (0xB004, 0x604) |
+| `exec` | `exec <file>` | Load and run an ELF executable from NVFS |
 
 ## Project layout
 
@@ -160,6 +162,7 @@ shutdown Power off
 │   │   ├── interrupt.S         # ISR/IRQ stubs (GAS macros)
 │   │   ├── ports.h             # inb/outb/inw/outw inline asm
 │   │   ├── timer.c/h           # PIT driver
+│   ├── elf.c/h               # ELF loader for user-space executables
 │   ├── memory/
 │   │   ├── pfa.c/h             # Page Frame Allocator (bitmap, 32MB)
 │   │   ├── paging.c/h          # Paging (PD/PT, identity map, CR0.PG)
@@ -174,8 +177,15 @@ shutdown Power off
 │       ├── serial.c/h          # COM1 serial driver
 ├── build/                      # Build artifacts
 ├── tools/
-│   ├── mknvfs.py               # NVFS disk formatter (16MB, 128 inodes)
+│   ├── mknvfs.py               # NVFS disk formatter with directory packing (16MB)
 │   ├── genfont.py              # VGA 8×16 bitmap font → font.h generator
+├── rootfs/                     # User-space ELF executables packed into NVFS
+│   └── triangle.elf            # Triangle test program
+├── tests/
+│   ├── triangle.c              # Triangle test source
+│   ├── app.ld                  # App linker script
+│   └── noverix.h               # App header
+├── LICENSE                     # GPLv3
 ├── noverix.img                 # Combined disk (boot + kernel + NVFS)
 ├── nvfs_disk.img               # 16 MB NVFS disk image
 ├── linker.ld                   # ELF linker script

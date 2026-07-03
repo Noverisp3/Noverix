@@ -12,6 +12,7 @@
 #include "memory/paging.h"
 #include "memory/heap.h"
 #include "drivers/graphics.h"
+#include "elf.h"
 
 #define VBE_INFO_ADDR ((volatile unsigned int *)0x1000)
 
@@ -194,6 +195,7 @@ static void execute_cmd(const char *cmd, char *arg)
         print_string("crash    Trigger a crash (for testing)\n");
         print_string("reboot   Reboot system\n");
         print_string("shutdown Power off\n");
+        print_string("exec     Run ELF executable\n");
         print_string("|        Pipe: cmd1 | cmd2 (output of cmd1 goes to cmd2)\n");
     } else if (strcmp(cmd, "echo") == 0) {
         int is_append = 0;
@@ -341,6 +343,14 @@ static void execute_cmd(const char *cmd, char *arg)
     } else if (strcmp(cmd, "shutdown") == 0 || strcmp(cmd, "poweroff") == 0) {
         print_string("Shutting down...\n");
         shutdown();
+    } else if (strcmp(cmd, "exec") == 0) {
+        if (arg[0]) {
+            if (elf_exec(arg) != 0) {
+                print_string("Execution failed\n");
+            }
+        } else {
+            print_string("Usage: exec <file>\n");
+        }
     } else if (cmd[0]) {
         print_string("Unknown command: ");
         print_string(cmd);

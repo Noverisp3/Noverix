@@ -110,7 +110,7 @@ void print_char(char c)
         int max_cols = fb_cols();
         int max_rows = fb_rows();
         if (cursor_x >= max_cols) { cursor_x = 0; cursor_y++; }
-        if (cursor_y >= max_rows) scroll_gfx(1);
+        if (cursor_y >= max_rows) { scroll_gfx(1); cursor_y = max_rows - 1; }
         return;
     }
     unsigned short *video = (unsigned short *)VIDEO_MEMORY;

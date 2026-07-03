@@ -48,6 +48,7 @@ Project_002_OS/
 │   │   ├── pfa.c / pfa.h     # Page Frame Allocator (bitmap, 32MB)
 │   │   ├── paging.c / paging.h # Paging (PD/PT, identity map, CR0.PG)
 │   │   ├── heap.c / heap.h   # Heap allocator (malloc/free, boundary tags)
+│   ├── elf.c / elf.h         # ELF loader for user-space executables
 │   └── drivers/
 │       ├── ata.c / ata.h     # ATA PIO: probe, LBA28 read/write
 │       ├── nvfs.c / nvfs.h   # NVFS: extent-based filesystem driver
@@ -56,11 +57,20 @@ Project_002_OS/
 │       ├── graphics.c / .h   # VBE framebuffer: pixel, rect, char, scroll
 │       ├── font.h            # Generated 8×16 bitmap font (95 chars)
 │       └── serial.c / .h    # COM1: init, putchar, puts, puthex, data_available, read_char
+├── rootfs/
+│   └── triangle.elf          # User-space ELF executable
+├── tests/
+│   ├── triangle.c             # Test program source
+│   ├── app.ld                 # App linker script
+│   └── noverix.h              # App header (syscall, VBE info, math)
 ├── tools/
-│   ├── mknvfs.py             # NVFS disk formatter (16MB, 32768 sectors)
+│   ├── mknvfs.py             # NVFS disk formatter with directory packing (16MB, 32768 sectors)
 │   └── genfont.py            # VGA 8×16 bitmap font → font.h generator
 ├── linker.ld                 # ELF linker: 0x2000, PHDRS RX/RW
-├── Makefile                  # clang + nasm + ld.bfd + objcopy + python
+├── Makefile                  # clang + nasm + ld.bfd + objcopy + python, ELF + rootfs targets
+├── LICENSE                   # GPLv3
+├── combine.ps1               # PowerShell disk combination script
+├── run.bat                   # Windows batch run script
 ├── noverix.img               # Combined disk (boot + kernel + NVFS)
 ├── nvfs_disk.img             # 16MB NVFS raw image
 ├── README.md
@@ -108,13 +118,13 @@ Project_002_OS/
    - `history_add(buf)`: Add command to history ring (16 entries), with overflow protection (shifts oldest when full) | [strcpy, strcmp]
    - `readline(buf, max)`: Read input from keyboard + serial (via `read_char_any`), inline editing (LEFT/RIGHT move, mid-line insert/delete), UP/DOWN history, Ctrl+C (char 0x03) cancels line and prints ^C | [read_char_any, print_string, history_add]
    - `read_char_any(void)`: Read char from keyboard (get_char) or serial (serial_read_char) — non-blocking | [get_char, serial_data_available, serial_read_char]
-   - `execute_cmd(cmd, arg)`: Dispatch parsed command (extracted from handle_cmd for pipe reuse). Echo redirection has bounds checking on `>` operator. Hex/sleep commands have integer overflow guards | [strcmp, print_string, clear_screen, print_hex, sleep_ms, nvfs_list, nvfs_chdir, nvfs_read, nvfs_write, nvfs_delete, nvfs_mkdir, nvfs_rmdir, reboot, shutdown]
+   - `execute_cmd(cmd, arg)`: Dispatch parsed command (extracted from handle_cmd for pipe reuse). Echo redirection has bounds checking on `>` operator. Hex/sleep commands have integer overflow guards. Includes `exec` for ELF binaries | [strcmp, print_string, clear_screen, print_hex, sleep_ms, nvfs_list, nvfs_chdir, nvfs_read, nvfs_write, nvfs_delete, nvfs_mkdir, nvfs_rmdir, reboot, shutdown, elf_exec]
    - `handle_cmd(buf)`: Parse `|` pipe → split left/right → `set_capture(1)` → `execute_cmd(cmd1, arg1)` → `set_capture(0)` → copy captured output to `pipe_data` → `execute_cmd(cmd2, arg2)` | [execute_cmd, set_capture, get_capture]
    - `kernel_main(void)`: Init sequence → shell loop | [init_serial, init_gdt, init_idt, init_screen, init_keyboard, init_timer, pfa_init, init_paging, heap_init, ata_init, nvfs_mount]
 - **Static data:** `history[HISTORY_SIZE][LINE_BUF]`, `pipe_data[4096]`, `has_pipe_data`
 - **VBE init:** After paging, reads VBE info at `0x1000` (LFB, width, height, pitch, bpp). If LFB is non-zero, maps the framebuffer into page tables via `map_page()` (576 pages for 1024×768×24bpp), then calls `init_graphics()` to activate graphics mode. Falls back to text mode if LFB is zero (VBE unavailable).
-- **Import:** `screen.h`, `keyboard.h`, `serial.h`, `ata.h`, `nvfs.h`, `gdt.h`, `idt.h`, `timer.h`, `ports.h`, `graphics.h`
-- **New shell features over FAT16 version:** `mkdir`, `rmdir`, `cd` (with path, `..`, `./..`, `/`). Dynamic prompt showing current path (e.g. `/MYDIR$`). `>>` append operator. `|` pipe operator. Specific error messages via `nvfs_strerror(nvfs_errno)`.
+- **Import:** `screen.h`, `keyboard.h`, `serial.h`, `ata.h`, `nvfs.h`, `gdt.h`, `idt.h`, `timer.h`, `ports.h`, `graphics.h`, `elf.h`
+- **New shell features over FAT16 version:** `mkdir`, `rmdir`, `cd` (with path, `..`, `./..`, `/`). Dynamic prompt showing current path (e.g. `/MYDIR$`). `>>` append operator. `|` pipe operator. `exec` for running ELF executables. Specific error messages via `nvfs_strerror(nvfs_errno)`.
 - **Pipe flow:** `set_capture(1)` → print_*/print_string redirect to 4KB capture buffer → `set_capture(0)` → `get_capture()` → copy to `pipe_data` → set `has_pipe_data=1` → execute cmd2 (cat/echo read pipe_data when arg is empty).
 - **Ctrl+C:** When `readline` receives char 0x03, it prints `^C\n` and returns an empty buffer.
 - **Serial input:** `readline` polls both keyboard (IRQ1 ring buffer) and COM1 serial (non-blocking poll). Allows command piping via `-serial stdio`.
@@ -230,6 +240,19 @@ Project_002_OS/
   - `set_footer(addr, size)`: Write size at block end (for boundary tag) | []
 - **Import:** `serial.h`
 - **Bug fix:** Removed `prev_addr = (unsigned int)prev_hdr;` in backward merge (`free()`). This line assigned `prev_addr` the address of a local stack pointer instead of the heap block address, causing wrong footer and heap corruption.
+
+---
+
+### `kernel/elf.c` + `elf.h`
+
+- **Role:** ELF loader — loads 32-bit ELF executables from NVFS and switches to user-space.
+- **Constants:** `ELF_MAGIC=0x464C457F`, `PT_LOAD=1`, `SYSCALL_INT=0x80`
+- **Functions:**
+  - `elf_exec(path)`: Read ELF file from NVFS → validate magic → parse program headers → allocate pages → load segments → jump to entry point | [nvfs_read, alloc_frame, map_page]
+  - `syscall_handler(regs)`: Handle software interrupt 0x80 (syscall dispatch) | []
+- **Import:** `nvfs.h`, `pfa.h`, `paging.h`, `idt.h`
+- **User-space execution:** `elf_exec` maps the ELF segments into memory below the kernel, sets up a minimal user stack, and jumps to the entry point with CS=user_code and DS=user_data segments.
+- **Security:** Basic memory isolation — user-space code runs in ring 3 segments. Syscalls return to kernel via interrupt 0x80.
 
 ---
 

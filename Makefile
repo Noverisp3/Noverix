@@ -26,7 +26,8 @@ KERNEL_OBJS = \
 	$(BUILD_DIR)/pfa.o \
 	$(BUILD_DIR)/paging.o \
 	$(BUILD_DIR)/heap.o \
-	$(BUILD_DIR)/graphics.o
+	$(BUILD_DIR)/graphics.o \
+	$(BUILD_DIR)/elf.o
 
 .PHONY: all clean run run-qemu iso
 
@@ -60,10 +61,15 @@ $(BUILD_DIR)/os-image.bin: $(BUILD_DIR)/bootloader.bin $(BUILD_DIR)/kernel.bin |
 	truncate -s 1474560 $@
 
 clean:
-	rm -rf $(BUILD_DIR) nvfs_disk.img os-image.iso noverix.img
+	rm -rf $(BUILD_DIR) rootfs nvfs_disk.img os-image.iso noverix.img
 
-nvfs_disk.img: tools/mknvfs.py
-	python3 tools/mknvfs.py $@
+nvfs_disk.img: tools/mknvfs.py rootfs/triangle.elf
+	python3 tools/mknvfs.py $@ rootfs
+
+rootfs/triangle.elf: tests/triangle.c tests/noverix.h tests/app.ld | $(BUILD_DIR)
+	mkdir -p rootfs
+	$(CC) -m32 -ffreestanding -fno-pie -fno-pic -c tests/triangle.c -o $(BUILD_DIR)/triangle.o
+	$(LD) -m elf_i386 -no-pie -T tests/app.ld $(BUILD_DIR)/triangle.o -o $@
 
 $(BUILD_DIR)/os-image.iso: $(BUILD_DIR)/os-image.bin
 	xorriso -as mkisofs -b os-image.bin -no-emul-boot -boot-load-size 4 \
