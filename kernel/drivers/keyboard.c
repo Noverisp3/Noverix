@@ -43,8 +43,6 @@ static const char scancode_ascii_shift[TABLE_SIZE] = {
     'M', '<', '>', '?', 0, '*', 0, ' '
 };
 
-static int kb_debug_cnt;
-
 static void keyboard_handler(registers_t *regs)
 {
     (void)regs;

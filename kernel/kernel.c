@@ -419,7 +419,6 @@ void kernel_main(void)
         }
         print_string(prompt);
         readline(buf, LINE_BUF);
-        debug_log("cmd: "); serial_write_string(buf); serial_write_char('\n');
         handle_cmd(buf);
     }
 }
