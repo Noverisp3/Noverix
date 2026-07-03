@@ -9,7 +9,8 @@ A minimal x86 hobby operating system built from scratch. Boots from real mode in
 | **Boot** | Real-mode → protected-mode transition, A20 gate enable, GDT loading, forward `rep movsd` safe kernel copy. |
 | **Disk I/O** | ATA PIO (LBA28) read/write, dual-channel primary/secondary, IDENTIFY-based drive detection, sector-level access. |
 | **NVFS** | Extent-based filesystem: superblock (sector 1), block bitmap (sectors 2–9), inode table (sectors 10–41, expandable), data blocks (sectors 42–32767). Each inode has 13 direct extents + 1 indirect block pointer (linked extents, up to 64 more extents). Shadow paging for crash-safe writes. Dynamic inode table expansion when full. File timestamps (ctime/mtime, seconds since boot) stored in inode. |
-| **VGA text mode** | 80×25 text buffer, hardware cursor, terminal scrolling, hex/dec rendering. |
+| **VGA text mode** | 80×25 text buffer, hardware cursor, terminal scrolling, hex/dec rendering. Fallback when VBE unavailable. |
+| **VBE graphics mode** | 1024×768×24bpp framebuffer (mode 0x118), bitmap font rendering (8×16), pixel-level draw, smooth scrolling. Automatic dispatch in screen driver when active. |
 | **PS/2 keyboard** | Interrupt-driven ring buffer, shift/caps, command history with arrow keys. |
 | **Interrupts** | IDT with 32 exception ISRs and 16 IRQs. Full register dump on exception (`ud2` crash command). |
 | **Timer (PIT)** | Tick counter via IRQ0, `sleep_ms()` for delays, `get_ticks()` for time source. |
@@ -54,8 +55,8 @@ Produces `build/os-image.bin` — a 1.44 MB floppy image and `nvfs_disk.img` —
 | --- | --- |
 | `make` / `make all` | Build `os-image.bin` + `nvfs_disk.img` |
 | `make clean` | Remove `build/`, images |
-| `make run-qemu` | Floppy + NVFS disk (QEMU) |
-| `make run-qemu-nrx` | Single-disk HDD boot with NVFS |
+| `make run-qemu` | Floppy + NVFS disk (QEMU, `-vga std`) |
+| `make run-qemu-nrx` | Single-disk HDD boot with NVFS (`-vga std`) |
 | `make iso` | Build `build/os-image.iso` |
 | `make noverix.img` | Combined disk: `dd` to USB for real boot |
 
@@ -167,11 +168,14 @@ shutdown Power off
 │       ├── ata.c/h             # ATA PIO driver (LBA28, IDENTIFY)
 │       ├── nvfs.c/h            # NVFS extent-based filesystem driver
 │       ├── keyboard.c/h        # PS/2 keyboard driver
-│       ├── screen.c/h          # VGA text mode driver
+│       ├── screen.c/h          # VGA text mode + VBE graphics dispatch driver
+│       ├── graphics.c/h        # VBE framebuffer: pixel, rect, char, scroll
+│       ├── font.h              # Generated bitmap font 8×16 (95 chars)
 │       ├── serial.c/h          # COM1 serial driver
 ├── build/                      # Build artifacts
 ├── tools/
-│   └── mknvfs.py               # NVFS disk formatter (16MB, 128 inodes)
+│   ├── mknvfs.py               # NVFS disk formatter (16MB, 128 inodes)
+│   ├── genfont.py              # VGA 8×16 bitmap font → font.h generator
 ├── noverix.img                 # Combined disk (boot + kernel + NVFS)
 ├── nvfs_disk.img               # 16 MB NVFS disk image
 ├── linker.ld                   # ELF linker script
@@ -185,13 +189,15 @@ shutdown Power off
 | Address | Size | Contents |
 | --- | --- | --- |
 | `0x0500` | ~256 B | PM trampoline (32-bit) |
-| `0x0600` | variable | Kernel staging buffer (loaded from disk) |
+| `0x0600` | 256 B | VBE mode info buffer (during boot) |
+| `0x1000` | 11 B | VBE info: LFB (4B) + width (2B) + height (2B) + pitch (2B) + bpp (1B) |
 | `0x2000` | variable | Kernel destination (executed from here) |
 | `0x7C00` | 512 B | Bootloader MBR and 16-bit stack |
 | `0x90000` | variable | 32-bit stack (grows downward) |
 | `0xA0000` | 384 KB | Legacy/BIOS/VGA (reserved) |
-| `0xB8000` | 4 KB | VGA text framebuffer (80×25 × 2 bytes) |
+| `0xB8000` | 4 KB | VGA text framebuffer (80×25 × 2 bytes, unused in VBE mode) |
 | `0x100000` | ~31 MB | Free physical memory (managed by PFA + identity mapped) |
+| `0xFD000000` | ~3 MB | VBE LFB framebuffer (identity-mapped via `map_page()` at kernel init) |
 
 ## Boot process
 
@@ -199,6 +205,7 @@ shutdown Power off
 BIOS → 0x7C00 (bootloader MBR)
   ├── Real-mode setup, INT 0x13 loads kernel sectors to 0x9000
   ├── A20 gate enable (port 0x92)
+  ├── VBE init: INT 0x10 mode 0x118 (1024×768×24bpp LFB), info stored at 0x1000
   ├── GDT load, CR0 bit 0 set
   └── Far jump to PM trampoline at 0x0500
 
@@ -215,6 +222,7 @@ _start → kernel_main
   ├── init_screen() / init_keyboard() / init_timer()
   ├── pfa_init() — page frame allocator (bitmap, mark reserved frames)
   ├── init_paging() — identity map 32MB, enable CR0.PG
+  ├── VBE init: read info at 0x1000 → map LFB into page tables → init_graphics()
   ├── heap_init() — malloc/free at 0x800000 (2MB)
   ├── ata_init() — probe ATA drives
   ├── nvfs_mount() — mount NVFS volume
@@ -233,3 +241,4 @@ _start → kernel_main
 - **Dynamic inode table** — when the 128 inodes are exhausted, the driver allocates a new block from the bitmap, expands the inode table, and updates the superblock. No more fixed inode limit.
 - **NVFS disk format** — 16 MB (32768 sectors). Bitmap covers data blocks only. Root inode is always 0. Directory entries are 32 bytes (name[28] + inode[4]), 16 per sector.
 - **Serial input** — shell accepts input from both keyboard and COM1 serial port. Use `-serial stdio` for headless operation and scripting.
+- **VBE Graphics** — bootloader sets VBE mode 0x118 (1024×768×24bpp LFB) via INT 0x10, stores mode info at `0x1000` (LFB, width, height, pitch, bpp). Kernel reads this info, maps the LFB into page tables via `map_page()` (576 pages for 3MB framebuffer), and calls `init_graphics()` from `graphics.c`. The screen driver (`screen.c`) dispatches `print_char`/`clear_screen`/`scroll` to either VGA text (0xB8000) or VBE framebuffer based on `is_graphics_active()`. Font is a generated 8×16 bitmap at `kernel/drivers/font.h` from `tools/genfont.py`. Use QEMU's `-vga std` to enable.

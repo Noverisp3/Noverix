@@ -76,6 +76,35 @@ start:
     mov si, msg_loaded
     call print_string
 
+    ; ── VBE init: try 1024x768x32 (mode 0x118) ──
+    xor ax, ax
+    mov es, ax
+    mov ax, 0x4F01
+    mov cx, 0x0118
+    mov di, 0x0600
+    int 0x10
+    cmp al, 0x4F
+    jne .vbe_fail
+    mov ax, 0x4F02
+    mov bx, 0x4118
+    int 0x10
+    cmp al, 0x4F
+    jne .vbe_fail
+    mov eax, [es:di + 40]
+    mov [0x1000], eax
+    mov ax, [es:di + 18]
+    mov [0x1004], ax
+    mov ax, [es:di + 20]
+    mov [0x1006], ax
+    mov ax, [es:di + 16]
+    mov [0x1008], ax
+    mov al, [es:di + 25]
+    mov [0x100A], al
+    jmp .vbe_done
+.vbe_fail:
+    mov dword [0x1000], 0
+.vbe_done:
+
     xor ax, ax
     mov es, ax
     mov si, pm_trampoline
@@ -179,8 +208,8 @@ disk_sectors    dw 0
 sector          db 2
 head            db 0
 cylinder        db 0
-msg_loading     db "Noverix - Loading kernel...", 13, 10, 0
-msg_loaded      db "Kernel loaded.", 13, 10, 0
+msg_loading     db "Noverix Loading...", 13, 10, 0
+msg_loaded      db "Loaded.", 13, 10, 0
 msg_disk_error  db "Disk error!", 13, 10, 0
 
 times 510 - ($ - $$) db 0

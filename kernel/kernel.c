@@ -11,6 +11,9 @@
 #include "memory/pfa.h"
 #include "memory/paging.h"
 #include "memory/heap.h"
+#include "drivers/graphics.h"
+
+#define VBE_INFO_ADDR ((volatile unsigned int *)0x1000)
 
 #define debug_log(msg) serial_write_string("[kernel] "); serial_write_string(msg); serial_write_char('\n')
 
@@ -469,6 +472,36 @@ void kernel_main(void)
             serial_write_char('\n');
 
             free_frame(phys);
+        }
+    }
+
+    // ── VBE init ──
+    {
+        volatile unsigned char *vbe = (volatile unsigned char *)0x1000;
+        unsigned int lfb = *(volatile unsigned int *)vbe;
+        unsigned short vbe_w = *(volatile unsigned short *)(vbe + 4);
+        unsigned short vbe_h = *(volatile unsigned short *)(vbe + 6);
+        unsigned short vbe_p = *(volatile unsigned short *)(vbe + 8);
+        unsigned short vbe_bpp = *(volatile unsigned char *)(vbe + 10);
+        serial_write_string("[vbe] lfb="); serial_write_hex(lfb);
+        serial_write_string(" w="); serial_write_hex(vbe_w);
+        serial_write_string(" h="); serial_write_hex(vbe_h);
+        serial_write_string(" p="); serial_write_hex(vbe_p);
+        serial_write_string(" bpp="); serial_write_hex(vbe_bpp);
+        serial_write_char('\n');
+        if (lfb && vbe_w && vbe_h) {
+            unsigned int fb_size = vbe_h * vbe_p;
+            unsigned int pages = (fb_size + 0xFFF) / 0x1000;
+            serial_write_string("[vbe] mapping "); serial_write_hex(pages);
+            serial_write_string(" pages for framebuffer\n");
+            for (unsigned int i = 0; i < pages; i++) {
+                map_page(lfb + i * 0x1000, lfb + i * 0x1000, PAGE_WRITE);
+            }
+            init_graphics(lfb, vbe_w, vbe_h, vbe_p, vbe_bpp);
+            clear_screen();
+            serial_write_string("[vbe] graphics mode active\n");
+        } else {
+            serial_write_string("[vbe] VBE not available, staying in text mode\n");
         }
     }
 

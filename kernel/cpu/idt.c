@@ -114,6 +114,27 @@ static const char *exception_names[32] = {
     "Reserved"
 };
 
+static unsigned int read_cr0(void)
+{
+    unsigned int val;
+    __asm__ volatile ("mov %%cr0, %0" : "=r" (val));
+    return val;
+}
+
+static unsigned int read_cr2(void)
+{
+    unsigned int val;
+    __asm__ volatile ("mov %%cr2, %0" : "=r" (val));
+    return val;
+}
+
+static unsigned int read_cr3(void)
+{
+    unsigned int val;
+    __asm__ volatile ("mov %%cr3, %0" : "=r" (val));
+    return val;
+}
+
 static void dump_registers(registers_t *regs)
 {
     print_string("EIP: "); print_hex(regs->eip);
@@ -138,6 +159,39 @@ static void dump_registers(registers_t *regs)
     print_string("  FS: "); print_hex(regs->fs);
     print_string("  GS: "); print_hex(regs->gs);
     print_string("\n");
+
+    print_string("CR0: "); print_hex(read_cr0());
+    print_string("  CR2: "); print_hex(read_cr2());
+    print_string("  CR3: "); print_hex(read_cr3());
+    print_string("\n");
+}
+
+static void dump_pagefault(registers_t *regs)
+{
+    unsigned int cr2 = read_cr2();
+    print_string("CR2 (fault addr): "); print_hex(cr2); print_string("\n");
+
+    unsigned int ec = regs->err_code;
+    print_string("Page fault: ");
+    print_string(ec & 1 ? "page-protection" : "not-present");
+    print_string(", ");
+    print_string(ec & 2 ? "write" : "read");
+    print_string(", ");
+    print_string(ec & 4 ? "user" : "supervisor");
+    print_string("\n");
+}
+
+static void dump_backtrace(registers_t *regs)
+{
+    unsigned int *ebp = (unsigned int *)regs->ebp;
+    print_string("Stack trace:\n");
+    int depth = 0;
+    while (ebp && (unsigned int)ebp >= 0x00010000 && (unsigned int)ebp < 0x00090000 && depth < 16) {
+        unsigned int eip = ebp[1];
+        print_string("  ["); print_hex(eip); print_string("]\n");
+        ebp = (unsigned int *)ebp[0];
+        depth++;
+    }
 }
 
 static void exception_handler(registers_t *regs)
@@ -156,7 +210,12 @@ static void exception_handler(registers_t *regs)
     print_string("Error code: "); print_hex(regs->err_code);
     print_string("\n\n");
 
+    if (regs->int_no == 0x0E)
+        dump_pagefault(regs);
+
     dump_registers(regs);
+
+    dump_backtrace(regs);
 
     print_string("\nSystem halted.\n");
 
@@ -169,6 +228,9 @@ static void exception_handler(registers_t *regs)
     serial_write_string("Error code: "); serial_write_hex(regs->err_code);
     serial_write_string(" EIP: "); serial_write_hex(regs->eip);
     serial_write_string(" CS: "); serial_write_hex(regs->cs);
+    serial_write_string("\n");
+    if (regs->int_no == 0x0E)
+        serial_write_hex(read_cr2());
     serial_write_string("\n");
 
     __asm__ volatile ("cli; hlt");

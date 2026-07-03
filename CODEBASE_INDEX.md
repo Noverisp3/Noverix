@@ -7,16 +7,18 @@
 ```
 BIOS
  └─ boot/bootloader.asm (real-mode INT 0x13 load kernel → 0x9000)
+    ├─ VBE init: INT 0x10 mode 0x118, info at 0x1000
     └─ PM trampoline (forward copy 0x9000 → 0x2000)
        └─ kernel/entry.S (BSS zeroing)
           └─ kernel/kernel.c::kernel_main (C entry)
              ├─ kernel/cpu/gdt.c       → GDT reload
              ├─ kernel/cpu/idt.c       → IDT + PIC remap + exceptions
-             ├─ kernel/drivers/screen.c → VGA text mode
+             ├─ kernel/drivers/screen.c → VGA text / VBE graphics dispatch
              ├─ kernel/drivers/keyboard.c → PS/2 IRQ1
              ├─ kernel/cpu/timer.c     → PIT IRQ0
              ├─ kernel/memory/pfa.c    → page frame allocator
              ├─ kernel/memory/paging.c → identity map 32MB, enable CR0.PG
+             ├─ kernel/drivers/graphics.c → VBE framebuffer init + draw
              ├─ kernel/memory/heap.c   → malloc/free allocator
              ├─ kernel/drivers/ata.c   → ATA probe
              ├─ kernel/drivers/nvfs.c  → mount NVFS from ATA LBA
@@ -49,11 +51,14 @@ Project_002_OS/
 │   └── drivers/
 │       ├── ata.c / ata.h     # ATA PIO: probe, LBA28 read/write
 │       ├── nvfs.c / nvfs.h   # NVFS: extent-based filesystem driver
-│       ├── keyboard.c / .h   # PS/2 IRQ1: scancode→ASCII, ring buf
-│       ├── screen.c / .h     # VGA 80×25: print, scroll, cursor
+│       ├── keyboard.c / .h     # PS/2 IRQ1: scancode→ASCII, ring buf
+│       ├── screen.c / .h     # VGA text + VBE graphics dispatch
+│       ├── graphics.c / .h   # VBE framebuffer: pixel, rect, char, scroll
+│       ├── font.h            # Generated 8×16 bitmap font (95 chars)
 │       └── serial.c / .h    # COM1: init, putchar, puts, puthex, data_available, read_char
 ├── tools/
-│   └── mknvfs.py             # NVFS disk formatter (16MB, 32768 sectors)
+│   ├── mknvfs.py             # NVFS disk formatter (16MB, 32768 sectors)
+│   └── genfont.py            # VGA 8×16 bitmap font → font.h generator
 ├── linker.ld                 # ELF linker: 0x2000, PHDRS RX/RW
 ├── Makefile                  # clang + nasm + ld.bfd + objcopy + python
 ├── noverix.img               # Combined disk (boot + kernel + NVFS)
@@ -77,6 +82,7 @@ Project_002_OS/
   - `switch_to_pm`: GDT load → A20 → CR0 bit 0 → far jump 0x0500 | [gdt descriptor inline]
   - `pm_trampoline` (32-bit): reload segments, ESP=0x90000, forward rep movsd 0x9000→0x2000, call 0x2000 | []
 - **Import:** Constants `KERNEL_OFFSET=0x2000`, `KERNEL_LOAD_ADDR=0x9000`, `PM_TRAMPOLINE_ADDR=0x0500`
+- **VBE init:** After kernel load, calls INT 0x10 AX=0x4F01/CX=0x0118 (get mode info) then AX=0x4F02/BX=0x4118 (set mode 0x118 with LFB). Mode info buffer at `0x0000:0x0600` to avoid overwriting kernel load area. LFB/width/height/pitch/bpp stored at `0x1000` for kernel consumption.
 - **Notes:** Forward copy (`cld` `rep movsd`) is safe because dest (0x2000) < src (0x9000) — source is always read before dest overwrites, even when overlapping (kernel >56 sectors). Replaces the old backward copy (`std`) which corrupted the source when dest overlapped source.
 
 ---
@@ -106,7 +112,8 @@ Project_002_OS/
    - `handle_cmd(buf)`: Parse `|` pipe → split left/right → `set_capture(1)` → `execute_cmd(cmd1, arg1)` → `set_capture(0)` → copy captured output to `pipe_data` → `execute_cmd(cmd2, arg2)` | [execute_cmd, set_capture, get_capture]
    - `kernel_main(void)`: Init sequence → shell loop | [init_serial, init_gdt, init_idt, init_screen, init_keyboard, init_timer, pfa_init, init_paging, heap_init, ata_init, nvfs_mount]
 - **Static data:** `history[HISTORY_SIZE][LINE_BUF]`, `pipe_data[4096]`, `has_pipe_data`
-- **Import:** `screen.h`, `keyboard.h`, `serial.h`, `ata.h`, `nvfs.h`, `gdt.h`, `idt.h`, `timer.h`, `ports.h`
+- **VBE init:** After paging, reads VBE info at `0x1000` (LFB, width, height, pitch, bpp). If LFB is non-zero, maps the framebuffer into page tables via `map_page()` (576 pages for 1024×768×24bpp), then calls `init_graphics()` to activate graphics mode. Falls back to text mode if LFB is zero (VBE unavailable).
+- **Import:** `screen.h`, `keyboard.h`, `serial.h`, `ata.h`, `nvfs.h`, `gdt.h`, `idt.h`, `timer.h`, `ports.h`, `graphics.h`
 - **New shell features over FAT16 version:** `mkdir`, `rmdir`, `cd` (with path, `..`, `./..`, `/`). Dynamic prompt showing current path (e.g. `/MYDIR$`). `>>` append operator. `|` pipe operator. Specific error messages via `nvfs_strerror(nvfs_errno)`.
 - **Pipe flow:** `set_capture(1)` → print_*/print_string redirect to 4KB capture buffer → `set_capture(0)` → `get_capture()` → copy to `pipe_data` → set `has_pipe_data=1` → execute cmd2 (cat/echo read pipe_data when arg is empty).
 - **Ctrl+C:** When `readline` receives char 0x03, it prints `^C\n` and returns an empty buffer.
@@ -326,20 +333,26 @@ Project_002_OS/
 
 ### `kernel/drivers/screen.c` + `screen.h`
 
-- **Role:** VGA text mode 80×25 driver. Character output, hex/dec display, scroll, cursor. Capture mode for shell pipe operator.
+- **Role:** VGA text mode (80×25) + VBE graphics mode (1024×768) dispatch driver. Character output, hex/dec display, scroll, cursor. Capture mode for shell pipe operator.
 - **Static data:** `capture_mode`, `capture_buf[4096]`, `capture_pos`
+- **VBE Dispatch:** `clear_screen`, `set_cursor`, `print_char`, `scroll` check `is_graphics_active()` and call the VBE framebuffer versions when active:
+  - `clear_screen` → `fill_rect(..., GFX_BG)`
+  - `set_cursor` → no-op (hardware cursor unused)
+  - `print_char` → `draw_char_gfx()` for printable chars
+  - `scroll` → `scroll_gfx()`
+  - Text mode versions used when `is_graphics_active()` returns 0.
 - **Functions:**
-  - `clear_screen(void)`: Fill entire VGA memory (0xB8000) with spaces | [set_cursor]
+  - `clear_screen(void)`: Fill VGA memory (0xB8000) or framebuffer with spaces/black | [set_cursor, fill_rect]
   - `init_screen(void)`: Call clear_screen | [clear_screen]
-  - `set_cursor(x, y)`: port 0x3D4/0x3D5 | [outb]
-  - `scroll(void)`: Copy rows 1..24 to 0..23, clear row 24 | []
-  - `print_char(c)`: Print 1 char at cursor, handle \n, \b, \t. In capture mode, stores char to `capture_buf` instead of VGA | [scroll, set_cursor]
-  - `print_string(str)`: Print to serial (COM1) then VGA. Skips serial in capture mode | [serial_write_string, print_char]
+  - `set_cursor(x, y)`: port 0x3D4/0x3D5 in text mode, no-op in graphics | [outb]
+  - `scroll(void)`: Copy rows in text mode, or `scroll_gfx()` in graphics | []
+  - `print_char(c)`: Print 1 char at cursor, handle \n, \b, \t. In capture mode stores to `capture_buf`. In graphics mode calls `draw_char_gfx()` | [scroll, set_cursor, draw_char_gfx]
+  - `print_string(str)`: Print to serial (COM1) then screen. Skips serial in capture mode | [serial_write_string, print_char]
   - `print_hex(num)`: Print 8-digit hex (0x + 8 nibbles) | [print_string]
   - `print_int(num)`: Print decimal number | [print_char]
   - `set_capture(on)`: Enable/disable capture mode, reset `capture_pos` on enable, null-terminate on disable | []
   - `get_capture(void)`: Null-terminate and return pointer to captured output | []
-- **Import:** `ports.h`, `serial.h`
+- **Import:** `ports.h`, `serial.h`, `graphics.h`, `font.h`
 
 ---
 
@@ -355,3 +368,46 @@ Project_002_OS/
   - `serial_data_available(void)`: Check line status bit 0 (data ready) | [inb]
   - `serial_read_char(void)`: Read 1 byte from serial (non-blocking) | [inb]
 - **Import:** `ports.h`
+
+---
+
+### `kernel/drivers/graphics.c` + `graphics.h`
+
+- **Role:** VBE framebuffer driver — pixel-level drawing, bitmap font rendering, scrolling.
+- **Static data:** `lfb_ptr` (framebuffer address), `fb_active` (flag), `fb_width/height/pitch/bpp/bpp_bytes`
+- **Functions:**
+  - `init_graphics(lfb, width, height, pitch, bpp)`: Set LFB pointer and dimensions, activate graphics mode | []
+  - `is_graphics_active(void)`: Return `fb_active` flag | []
+  - `draw_pixel(x, y, color)`: Set pixel at (x,y) to 24/32-bit color | [pixel_write]
+  - `fill_rect(x, y, w, h, color)`: Fill rectangle with solid color | [pixel_write]
+  - `draw_char_gfx(x, y, c, fg, bg)`: Render 8×16 bitmap char at pixel position | [char_row, pixel_write]
+  - `scroll_gfx(lines)`: Scroll framebuffer up by N lines (font rows) | [fill_rect]
+  - `fb_cols(void)`: Return `fb_width / FONT_WIDTH` | []
+  - `fb_rows(void)`: Return `fb_height / FONT_HEIGHT` | []
+- **Internal:**
+  - `pixel_write(ptr, color)`: Write 24/32-bit color to framebuffer address | []
+  - `char_row(c, row)`: Look up font bitmap row for character | []
+- **Import:** `graphics.h`, `font.h`
+- **Pixel format:** 24bpp (3 bytes: B, G, R) or 32bpp (4 bytes: B, G, R, A). `pixel_write` handles both based on `fb_bpp_bytes`.
+
+---
+
+### `kernel/drivers/font.h`
+
+- **Role:** Generated 8×16 bitmap font for framebuffer rendering.
+- **Data:** `font_data[95][16]` — `static const unsigned char` array, one 16-byte column per ASCII char 32–126 (space through tilde). Each byte represents 8 pixels horizontally (MSB = leftmost pixel).
+- **Constants:** `FONT_WIDTH=8`, `FONT_HEIGHT=16`, `FONT_FIRST_CHAR=32`, `FONT_LAST_CHAR=126`, `FONT_NUM_CHARS=95`
+- **Generation:** Created by `tools/genfont.py` by extracting VGA ROM font from any system's VGA BIOS (reads from `/dev/fb0` or uses built-in VGA ROM data).
+- **Note:** Each `.c` file that includes this header gets its own copy (static). Only `graphics.c` includes it.
+
+---
+
+### `tools/genfont.py`
+
+- **Role:** Python script to generate `kernel/drivers/font.h` with VGA 8×16 bitmap font data.
+- **Functions:**
+  - `get_vga_font()`: Try to read VGA ROM font from `/sys/devices/virtual/...` or Linux console, fall back to hardcoded VGA ROM data.
+  - Emit `font_data[95][16]` C array as `static const unsigned char`.
+- **Output:** `kernel/drivers/font.h`
+- **Usage:** `python3 tools/genfont.py`
+- **Note:** Only needs to be re-run if the font changes. The generated file is committed.

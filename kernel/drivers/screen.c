@@ -1,6 +1,11 @@
 #include "screen.h"
 #include "serial.h"
+#include "graphics.h"
+#include "font.h"
 #include "../cpu/ports.h"
+
+#define GFX_FG 0x00C0C0C0
+#define GFX_BG 0x00000000
 
 #define VIDEO_MEMORY 0xB8000
 #define MAX_ROWS 25
@@ -30,6 +35,12 @@ const char *get_capture(void)
 
 void clear_screen(void)
 {
+    if (is_graphics_active()) {
+        fill_rect(0, 0, fb_cols() * FONT_WIDTH, fb_rows() * FONT_HEIGHT, GFX_BG);
+        cursor_x = 0;
+        cursor_y = 0;
+        return;
+    }
     unsigned short *video = (unsigned short *)VIDEO_MEMORY;
     int i;
     for (i = 0; i < MAX_ROWS * MAX_COLS; i++)
@@ -48,11 +59,13 @@ void set_cursor(int x, int y)
 {
     cursor_x = x;
     cursor_y = y;
-    unsigned short pos = y * MAX_COLS + x;
-    outb(0x3D4, 0x0F);
-    outb(0x3D5, (unsigned char)(pos & 0xFF));
-    outb(0x3D4, 0x0E);
-    outb(0x3D5, (unsigned char)((pos >> 8) & 0xFF));
+    if (!is_graphics_active()) {
+        unsigned short pos = y * MAX_COLS + x;
+        outb(0x3D4, 0x0F);
+        outb(0x3D5, (unsigned char)(pos & 0xFF));
+        outb(0x3D4, 0x0E);
+        outb(0x3D5, (unsigned char)((pos >> 8) & 0xFF));
+    }
 }
 
 static void scroll(void)
@@ -76,6 +89,26 @@ void print_char(char c)
             if (capture_pos < CAPTURE_SIZE - 1)
                 capture_buf[capture_pos++] = c;
         }
+        return;
+    }
+    if (is_graphics_active()) {
+        if (c == '\n') {
+            cursor_x = 0; cursor_y++;
+        } else if (c == '\b') {
+            if (cursor_x > 0) cursor_x--;
+        } else if (c == '\r') {
+            cursor_x = 0;
+            fill_rect(0, cursor_y * FONT_HEIGHT, fb_cols() * FONT_WIDTH, FONT_HEIGHT, GFX_BG);
+        } else if (c == '\t') {
+            cursor_x = (cursor_x + 8) & ~7;
+        } else if (c >= ' ') {
+            draw_char_gfx(cursor_x * FONT_WIDTH, cursor_y * FONT_HEIGHT, (unsigned char)c, GFX_FG, GFX_BG);
+            cursor_x++;
+        }
+        int max_cols = fb_cols();
+        int max_rows = fb_rows();
+        if (cursor_x >= max_cols) { cursor_x = 0; cursor_y++; }
+        if (cursor_y >= max_rows) scroll_gfx(1);
         return;
     }
     unsigned short *video = (unsigned short *)VIDEO_MEMORY;

@@ -25,7 +25,8 @@ KERNEL_OBJS = \
 	$(BUILD_DIR)/timer.o \
 	$(BUILD_DIR)/pfa.o \
 	$(BUILD_DIR)/paging.o \
-	$(BUILD_DIR)/heap.o
+	$(BUILD_DIR)/heap.o \
+	$(BUILD_DIR)/graphics.o
 
 .PHONY: all clean run run-qemu iso
 
@@ -74,15 +75,15 @@ noverix.img: $(BUILD_DIR)/os-image.bin nvfs_disk.img
 	@echo "Created $@ — dd to USB: sudo dd if=$@ of=/dev/sdX bs=512"
 
 run-qemu: $(BUILD_DIR)/os-image.bin nvfs_disk.img
-	qemu-system-x86_64 -boot order=a -drive format=raw,file=$<,if=floppy -drive file=nvfs_disk.img,format=raw,if=none,id=ata0 -device ide-hd,drive=ata0 -m 32
+	qemu-system-x86_64 -vga std -boot order=a -drive format=raw,file=$<,if=floppy -drive file=nvfs_disk.img,format=raw,if=none,id=ata0 -device ide-hd,drive=ata0 -m 32
 
 run-qemu-iso: $(BUILD_DIR)/os-image.iso nvfs_disk.img
-	qemu-system-x86_64 -boot order=d -cdrom $(BUILD_DIR)/os-image.iso \
+	qemu-system-x86_64 -vga std -boot order=d -cdrom $(BUILD_DIR)/os-image.iso \
 	  -drive file=nvfs_disk.img,format=raw,if=none,id=ata0 \
 	  -device ide-hd,drive=ata0 -m 32
 
 run-qemu-nrx: noverix.img
-	qemu-system-x86_64 -boot order=c \
+	qemu-system-x86_64 -vga std -boot order=c \
 	  -drive file=noverix.img,format=raw,if=none,id=ata0 \
 	  -device ide-hd,drive=ata0 -m 32
 
