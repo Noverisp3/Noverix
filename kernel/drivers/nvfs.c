@@ -870,6 +870,11 @@ int nvfs_write(const char *path, const void *data, unsigned size)
     inode.size = 0;
     inode.type = NVFS_TYPE_FILE;
     inode.extent_count = 0;
+    {
+        unsigned t = now_sec();
+        inode_set_ctime(&inode, t);
+        inode.mtime = t;
+    }
     if (extent_write(&inode, (const unsigned char *)data, size) != 0) {
         inode_free(inum); nvfs_errno = NVFS_ERR_NO_SPACE; return -1;
     }
@@ -914,6 +919,11 @@ int nvfs_mkdir(const char *path)
     inode.size = 0;
     inode.type = NVFS_TYPE_DIR;
     inode.extent_count = 0;
+    {
+        unsigned t = now_sec();
+        inode_set_ctime(&inode, t);
+        inode.mtime = t;
+    }
     if (inode_write(inum, &inode) != 0) { inode_free(inum); nvfs_errno = NVFS_ERR_IO; return -1; }
     if (dir_add(parent, name, inum) != 0) { inode_free(inum); return -1; }
     return 0;
