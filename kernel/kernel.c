@@ -55,6 +55,9 @@ static void shutdown(void)
     __asm__ volatile ("cli; hlt");
 }
 
+static char pipe_data[4096];
+static int has_pipe_data;
+
 static void history_add(const char *buf)
 {
     if (!buf[0]) return;
@@ -154,28 +157,15 @@ static void readline(char *buf, int max)
     buf[len] = 0;
 }
 
-static void handle_cmd(const char *buf)
+static void execute_cmd(const char *cmd, char *arg)
 {
-    char cmd[LINE_BUF];
-    char arg[LINE_BUF];
-    int i = 0, j = 0;
-
-    while (buf[i] && buf[i] == ' ') i++;
-    while (buf[i] && buf[i] != ' ') cmd[j++] = buf[i++];
-    cmd[j] = 0;
-
-    while (buf[i] && buf[i] == ' ') i++;
-    j = 0;
-    while (buf[i]) arg[j++] = buf[i++];
-    arg[j] = 0;
-
     if (strcmp(cmd, "help") == 0 || strcmp(cmd, "?") == 0) {
         print_string("Noverix Shell\n");
         print_string("-------------\n");
         print_string("help     Show this help\n");
         print_string("clear    Clear screen\n");
         print_string("echo     Print text or write file (echo text > file)\n");
-        print_string("cat      Display file contents\n");
+        print_string("cat      Display file contents (cat reads pipe when no file)\n");
         print_string("ls       List files (ls, ls <dir>)\n");
         print_string("cd       Change directory\n");
         print_string("mkdir    Create directory\n");
@@ -188,6 +178,7 @@ static void handle_cmd(const char *buf)
         print_string("crash    Trigger a crash (for testing)\n");
         print_string("reboot   Reboot system\n");
         print_string("shutdown Power off\n");
+        print_string("|        Pipe: cmd1 | cmd2 (output of cmd1 goes to cmd2)\n");
     } else if (strcmp(cmd, "echo") == 0) {
         int is_append = 0;
         char *redir = arg;
@@ -212,8 +203,14 @@ static void handle_cmd(const char *buf)
                 }
             }
         } else {
-            if (arg[0]) print_string(arg);
-            print_string("\n");
+            if (arg[0]) {
+                print_string(arg);
+                print_string("\n");
+            } else if (has_pipe_data) {
+                print_string(pipe_data);
+            } else {
+                print_string("\n");
+            }
         }
     } else if (strcmp(cmd, "clear") == 0) {
         clear_screen();
@@ -274,6 +271,8 @@ static void handle_cmd(const char *buf)
                 print_string(nvfs_strerror(nvfs_errno));
                 print_string("\n");
             }
+        } else if (has_pipe_data) {
+            print_string(pipe_data);
         } else {
             print_string("Usage: cat <file>\n");
         }
@@ -319,6 +318,99 @@ static void handle_cmd(const char *buf)
         print_string(cmd);
         print_string("\n");
         debug_log("unknown command"); serial_write_string(": "); serial_write_string(cmd); serial_write_char('\n');
+    }
+}
+
+static void handle_cmd(const char *buf)
+{
+    int pipe_idx = -1;
+    for (int i = 0; buf[i]; i++) {
+        if (buf[i] == '|') {
+            pipe_idx = i;
+            break;
+        }
+    }
+
+    if (pipe_idx >= 0) {
+        char left[LINE_BUF];
+        int j;
+        for (j = 0; j < pipe_idx && j < LINE_BUF - 1; j++)
+            left[j] = buf[j];
+        left[j] = 0;
+        while (j > 0 && left[j - 1] == ' ') left[--j] = 0;
+
+        char right[LINE_BUF];
+        int k = pipe_idx + 1;
+        int r;
+        for (r = 0; buf[k] && r < LINE_BUF - 1; k++, r++)
+            right[r] = buf[k];
+        right[r] = 0;
+        r = 0;
+        while (right[r] == ' ') r++;
+        if (r > 0) {
+            int s;
+            for (s = 0; right[s + r]; s++)
+                right[s] = right[s + r];
+            right[s] = 0;
+        }
+
+        char cmd1[LINE_BUF], arg1[LINE_BUF];
+        int i1 = 0, j1 = 0;
+        while (left[i1] && left[i1] == ' ') i1++;
+        while (left[i1] && left[i1] != ' ') cmd1[j1++] = left[i1++];
+        cmd1[j1] = 0;
+        while (left[i1] && left[i1] == ' ') i1++;
+        j1 = 0;
+        while (left[i1]) arg1[j1++] = left[i1++];
+        arg1[j1] = 0;
+
+        char cmd2[LINE_BUF], arg2[LINE_BUF];
+        int i2 = 0, j2 = 0;
+        while (right[i2] && right[i2] == ' ') i2++;
+        while (right[i2] && right[i2] != ' ') cmd2[j2++] = right[i2++];
+        cmd2[j2] = 0;
+        while (right[i2] && right[i2] == ' ') i2++;
+        j2 = 0;
+        while (right[i2]) arg2[j2++] = right[i2++];
+        arg2[j2] = 0;
+
+        if (!cmd1[0]) {
+            print_string("Syntax error: no command before pipe\n");
+            return;
+        }
+        if (!cmd2[0]) {
+            print_string("Syntax error: no command after pipe\n");
+            return;
+        }
+
+        set_capture(1);
+        execute_cmd(cmd1, arg1);
+        set_capture(0);
+
+        const char *captured = get_capture();
+        int p;
+        for (p = 0; captured[p] && p < (int)sizeof(pipe_data) - 1; p++)
+            pipe_data[p] = captured[p];
+        pipe_data[p] = 0;
+        has_pipe_data = 1;
+
+        execute_cmd(cmd2, arg2);
+        has_pipe_data = 0;
+    } else {
+        char cmd[LINE_BUF];
+        char arg[LINE_BUF];
+        int i = 0, j = 0;
+
+        while (buf[i] && buf[i] == ' ') i++;
+        while (buf[i] && buf[i] != ' ') cmd[j++] = buf[i++];
+        cmd[j] = 0;
+
+        while (buf[i] && buf[i] == ' ') i++;
+        j = 0;
+        while (buf[i]) arg[j++] = buf[i++];
+        arg[j] = 0;
+
+        execute_cmd(cmd, arg);
     }
 }
 

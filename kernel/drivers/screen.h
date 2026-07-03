@@ -10,5 +10,7 @@ void clear_screen(void);
 void set_cursor(int x, int y);
 int get_cursor_x(void);
 int get_cursor_y(void);
+void set_capture(int on);
+const char *get_capture(void);
 
 #endif

@@ -10,6 +10,24 @@
 static int cursor_x;
 static int cursor_y;
 
+#define CAPTURE_SIZE 4096
+static int capture_mode;
+static char capture_buf[CAPTURE_SIZE];
+static int capture_pos;
+
+void set_capture(int on)
+{
+    capture_mode = on;
+    if (on) capture_pos = 0;
+    else capture_buf[capture_pos < CAPTURE_SIZE ? capture_pos : CAPTURE_SIZE - 1] = 0;
+}
+
+const char *get_capture(void)
+{
+    capture_buf[capture_pos < CAPTURE_SIZE ? capture_pos : CAPTURE_SIZE - 1] = 0;
+    return capture_buf;
+}
+
 void clear_screen(void)
 {
     unsigned short *video = (unsigned short *)VIDEO_MEMORY;
@@ -50,6 +68,16 @@ static void scroll(void)
 
 void print_char(char c)
 {
+    if (capture_mode) {
+        if (c == '\n') {
+            if (capture_pos < CAPTURE_SIZE - 1)
+                capture_buf[capture_pos++] = '\n';
+        } else if (c >= ' ') {
+            if (capture_pos < CAPTURE_SIZE - 1)
+                capture_buf[capture_pos++] = c;
+        }
+        return;
+    }
     unsigned short *video = (unsigned short *)VIDEO_MEMORY;
     if (c == '\n') {
         cursor_x = 0;
@@ -79,7 +107,8 @@ void print_char(char c)
 
 void print_string(const char *str)
 {
-    serial_write_string(str);
+    if (!capture_mode)
+        serial_write_string(str);
     while (*str)
         print_char(*str++);
 }
