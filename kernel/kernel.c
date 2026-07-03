@@ -21,6 +21,8 @@
 #define PROMPT_LEN 256
 #define HISTORY_SIZE 16
 
+#define UINT_MAX 4294967295U
+
 static char history[HISTORY_SIZE][LINE_BUF];
 static int history_count;
 
@@ -61,16 +63,23 @@ static void shutdown(void)
 static char pipe_data[4096];
 static int has_pipe_data;
 
-static void history_add(const char *buf)
-{
-    if (!buf[0]) return;
-    if (history_count > 0 && strcmp(buf, history[history_count - 1]) == 0)
-        return;
-    if (history_count < HISTORY_SIZE) history_count++;
-    for (int i = history_count - 1; i > 0; i--)
-        strcpy(history[i], history[i - 1]);
-    strcpy(history[0], buf);
-}
+    static void history_add(const char *buf)
+    {
+        if (!buf[0]) return;
+        if (history_count > 0 && strcmp(buf, history[history_count - 1]) == 0)
+            return;
+        if (history_count >= HISTORY_SIZE) {
+            for (int i = 0; i < HISTORY_SIZE - 1; i++)
+                strcpy(history[i], history[i + 1]);
+            history_count = HISTORY_SIZE - 1;
+            strcpy(history[history_count], buf);
+            return;
+        }
+        if (history_count < HISTORY_SIZE) history_count++;
+        for (int i = history_count - 1; i > 0; i--)
+            strcpy(history[i], history[i - 1]);
+        strcpy(history[0], buf);
+    }
 
 static char read_char_any(void)
 {
@@ -189,7 +198,11 @@ static void execute_cmd(const char *cmd, char *arg)
     } else if (strcmp(cmd, "echo") == 0) {
         int is_append = 0;
         char *redir = arg;
-        while (*redir && *redir != '>') redir++;
+        while (redir < arg + LINE_BUF - 1 && *redir && *redir != '>') redir++;
+        if (redir >= arg + LINE_BUF - 1) {
+            print_string("Path too long\n");
+            return;
+        }
         if (*redir == '>') {
             if (*(redir + 1) == '>') {
                 is_append = 1;
@@ -225,6 +238,10 @@ static void execute_cmd(const char *cmd, char *arg)
         unsigned int n = 0;
         int k = 0;
         while (arg[k]) {
+            if (k >= 8 || n > UINT_MAX / 10 || (n == UINT_MAX / 10 && (arg[k] - '0') > UINT_MAX % 10)) {
+                print_string("Invalid number\n");
+                return;
+            }
             n = n * 10 + (arg[k] - '0');
             k++;
         }
@@ -236,6 +253,10 @@ static void execute_cmd(const char *cmd, char *arg)
         unsigned int n = 0;
         int k = 0;
         while (arg[k]) {
+            if (k >= 7 || n > UINT_MAX / 10 || (n == UINT_MAX / 10 && (arg[k] - '0') > UINT_MAX % 10)) {
+                print_string("Invalid number\n");
+                return;
+            }
             n = n * 10 + (arg[k] - '0');
             k++;
         }

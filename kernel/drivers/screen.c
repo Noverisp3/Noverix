@@ -24,12 +24,14 @@ void set_capture(int on)
 {
     capture_mode = on;
     if (on) capture_pos = 0;
-    else capture_buf[capture_pos < CAPTURE_SIZE ? capture_pos : CAPTURE_SIZE - 1] = 0;
+    if (capture_pos >= CAPTURE_SIZE) capture_pos = CAPTURE_SIZE - 1;
+    capture_buf[capture_pos] = 0;
 }
 
 const char *get_capture(void)
 {
-    capture_buf[capture_pos < CAPTURE_SIZE ? capture_pos : CAPTURE_SIZE - 1] = 0;
+    if (capture_pos >= CAPTURE_SIZE) capture_pos = CAPTURE_SIZE - 1;
+    capture_buf[capture_pos] = 0;
     return capture_buf;
 }
 
