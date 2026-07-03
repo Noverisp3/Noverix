@@ -788,11 +788,7 @@ int nvfs_list(const char *path)
                 print_string(de->name);
                 print_string("  ");
                 print_int(ci.size);
-                if (ci.type == NVFS_TYPE_DIR) print_string(" <DIR>");
-                else print_string(" bytes");
-                print_string("  ");
-                print_int(ci.mtime);
-                print_string("s\n");
+                print_string(ci.type == NVFS_TYPE_DIR ? " <DIR>\n" : " bytes\n");
             }
         }
     }

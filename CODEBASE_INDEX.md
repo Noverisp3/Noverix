@@ -290,7 +290,7 @@ Project_002_OS/
 
 - **Public API:**
   - `nvfs_mount(void)`: Read superblock → set sb_* fields → set nvfs_cwd = root | [find_drive, read_sector]
-  - `nvfs_list(path)`: List directory — `[DIR]` tag, decimal size, mtime in seconds | [resolve_path, inode_read, read_block, extent_load_all]
+  - `nvfs_list(path)`: List directory — `[DIR]` tag, decimal size | [resolve_path, inode_read, read_block, extent_load_all]
   - `nvfs_read(path, buf, max)`: Read file | [resolve_path, dir_find, inode_read, extent_read]
   - `nvfs_write(path, data, size)`: Write/overwrite file with shadow paging (alloc new → persist inode → free old) | [resolve_path, dir_find, inode_alloc, extent_write, dir_add, inode_write]
   - `nvfs_delete(path)`: Delete file | [resolve_path, dir_find, inode_read, inode_free, dir_remove]
