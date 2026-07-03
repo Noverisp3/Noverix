@@ -80,6 +80,67 @@ void *malloc(unsigned int size)
     return 0;
 }
 
+void *realloc(void *ptr, unsigned int size)
+{
+    if (!ptr)
+        return malloc(size);
+
+    if (size == 0)
+    {
+        free(ptr);
+        return 0;
+    }
+
+    unsigned int addr = (unsigned int)ptr - HEADER_SIZE;
+    if (addr < HEAP_START || addr >= HEAP_START + HEAP_SIZE)
+    {
+        serial_write_string("[heap] realloc: invalid pointer\n");
+        return 0;
+    }
+
+    unsigned int *hdr = (unsigned int *)addr;
+    unsigned int old_size = *hdr & ~1;
+    if (!(*hdr & 1))
+    {
+        serial_write_string("[heap] realloc: pointer not allocated\n");
+        return 0;
+    }
+
+    unsigned int old_data_size = old_size - HEADER_SIZE - FOOTER_SIZE;
+
+    size = (size + ALIGN - 1) & ~(ALIGN - 1);
+    unsigned int new_need = HEADER_SIZE + size + FOOTER_SIZE;
+    if (new_need < MIN_BLOCK)
+        new_need = MIN_BLOCK;
+
+    if (new_need <= old_size)
+    {
+        unsigned int remaining = old_size - new_need;
+        if (remaining >= MIN_BLOCK)
+        {
+            *hdr = new_need | 1;
+            set_footer(addr, new_need);
+            unsigned int *next_hdr = (unsigned int *)(addr + new_need);
+            *next_hdr = remaining;
+            set_footer(addr + new_need, remaining);
+        }
+        return ptr;
+    }
+
+    void *new_ptr = malloc(size);
+    if (!new_ptr)
+        return 0;
+
+    unsigned int copy_size = old_data_size < size ? old_data_size : size;
+    unsigned char *d = (unsigned char *)new_ptr;
+    unsigned char *s = (unsigned char *)ptr;
+    for (unsigned int i = 0; i < copy_size; i++)
+        d[i] = s[i];
+
+    free(ptr);
+    return new_ptr;
+}
+
 void free(void *ptr)
 {
     if (!ptr)

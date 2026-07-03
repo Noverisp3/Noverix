@@ -6,6 +6,7 @@
 
 void heap_init(void);
 void *malloc(unsigned int size);
+void *realloc(void *ptr, unsigned int size);
 void free(void *ptr);
 
 #endif

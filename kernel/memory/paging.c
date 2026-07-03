@@ -81,6 +81,38 @@ int map_page(unsigned int virt, unsigned int phys, unsigned int flags)
     return 0;
 }
 
+int unmap_page(unsigned int virt)
+{
+    unsigned int pde_idx = PDE_IDX(virt);
+    if (!(page_dir[pde_idx] & PAGE_PRESENT))
+        return -1;
+
+    page_table_entry_t *table = (page_table_entry_t *)(page_dir[pde_idx] & 0xFFFFF000);
+    unsigned int pte_idx = PTE_IDX(virt);
+    if (!(table[pte_idx] & PAGE_PRESENT))
+        return -1;
+
+    table[pte_idx] = 0;
+    __asm__ volatile ("invlpg (%0)" : : "r" (virt) : "memory");
+    return 0;
+}
+
+int get_page_mapping(unsigned int virt, unsigned int *phys_out)
+{
+    unsigned int pde_idx = PDE_IDX(virt);
+    if (!(page_dir[pde_idx] & PAGE_PRESENT))
+        return -1;
+
+    page_table_entry_t *table = (page_table_entry_t *)(page_dir[pde_idx] & 0xFFFFF000);
+    unsigned int pte_idx = PTE_IDX(virt);
+    if (!(table[pte_idx] & PAGE_PRESENT))
+        return -1;
+
+    if (phys_out)
+        *phys_out = table[pte_idx] & 0xFFFFF000;
+    return 0;
+}
+
 unsigned int read_cr3(void)
 {
     unsigned int val;
