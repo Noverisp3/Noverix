@@ -186,6 +186,12 @@ int elf_exec(const char *path)
     serial_write_hex(ehdr->e_entry);
     serial_write_string("\n");
 
+    if (ehdr->e_entry < 0x00800000 || ehdr->e_entry >= 0x00A00000)
+    {
+        print_string("Error: Invalid ELF entry point — outside app memory range\n");
+        return -1;
+    }
+
     serial_write_string("[elf] Program Header Table Offset: ");
     serial_write_hex(ehdr->e_phoff);
     serial_write_string(", Number of Headers: ");
