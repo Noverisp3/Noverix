@@ -2,15 +2,6 @@
 #include "../cpu/cpu.h"
 
 typedef struct {
-    unsigned short limit_low;
-    unsigned short base_low;
-    unsigned char base_middle;
-    unsigned char access;
-    unsigned char granularity;
-    unsigned char base_high;
-} __attribute__((packed)) gdt_entry_t;
-
-typedef struct {
     unsigned short limit;
     unsigned int base;
 } __attribute__((packed)) gdt_ptr_t;
@@ -40,7 +31,7 @@ static gdt_entry_t boot_gdt[5];
 static gdt_ptr_t boot_gdt_ptr;
 
 /* Per-CPU GDTs and TSSs */
-static gdt_entry_t per_cpu_gdt[MAX_CPU][GDT_ENTRIES];
+gdt_entry_t per_cpu_gdt[MAX_CPU][GDT_ENTRIES];    /* non-static for debugging */
 static gdt_ptr_t per_cpu_gdt_ptr[MAX_CPU];
 static tss_t per_cpu_tss[MAX_CPU];
 
