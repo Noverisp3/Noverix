@@ -73,6 +73,8 @@ IRQ 13 45
 IRQ 14 46
 IRQ 15 47
 
+ISR_NOERR 255
+
 isr_common:
     pusha
     pushl %ds

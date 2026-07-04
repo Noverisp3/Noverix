@@ -2,6 +2,7 @@
 #include "ports.h"
 #include "../drivers/screen.h"
 #include "../drivers/serial.h"
+#include "../apic/lapic.h"
 
 typedef struct {
     unsigned short base_low;
@@ -69,6 +70,7 @@ extern void irq12(void);
 extern void irq13(void);
 extern void irq14(void);
 extern void irq15(void);
+extern void isr255(void);
 
 static void idt_set_entry(unsigned char num, unsigned int base, unsigned short sel, unsigned char flags)
 {
@@ -247,12 +249,16 @@ void isr_handler(registers_t *regs)
 
 void irq_handler(registers_t *regs)
 {
-    if (regs->int_no >= 40)
-        outb(0xA0, 0x20);
-    outb(0x20, 0x20);
-
     if (interrupt_handlers[regs->int_no])
         interrupt_handlers[regs->int_no](regs);
+
+    if (apic_enabled) {
+        lapic_eoi();
+    } else {
+        if (regs->int_no >= 40)
+            outb(0xA0, 0x20);
+        outb(0x20, 0x20);
+    }
 }
 
 static void irq_remap(void)
@@ -341,6 +347,7 @@ void init_idt(void)
     idt_set_entry(45, (unsigned int)irq13, 0x08, 0x8E);
     idt_set_entry(46, (unsigned int)irq14, 0x08, 0x8E);
     idt_set_entry(47, (unsigned int)irq15, 0x08, 0x8E);
+    idt_set_entry(255, (unsigned int)isr255, 0x08, 0x8E);
 
     __asm__ volatile ("lidt %0" : : "m" (idt_ptr));
 

@@ -15,7 +15,10 @@
 #include "elf.h"
 #include "lib.h"
 #include "sync/sync.h"
+#include "apic/lapic.h"
+#include "apic/ioapic.h"
 #include "acpi/acpi.h"
+#include "cpu/cpu.h"
 
 #define VBE_INFO_ADDR ((volatile unsigned int *)0x1000)
 
@@ -618,6 +621,17 @@ void kernel_main(void)
         int my_id = get_cpu_id();
         serial_write_string("  BSP cpu_id="); serial_write_int(my_id);
         serial_write_string(my_id == 0 ? " OK\n" : " FAIL (expected 0)\n");
+    }
+
+    {
+        serial_write_string("[test] APIC init\n");
+        register_interrupt_handler(0xFF, spurious_handler);
+        lapic_init();
+        ioapic_init();
+        /* Mask PIC after I/O APIC takes over */
+        outb(0x21, 0xFF);
+        outb(0xA1, 0xFF);
+        serial_write_string("[test] APIC done\n");
     }
 
     // ── VBE init ──
