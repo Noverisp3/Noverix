@@ -95,17 +95,17 @@ noverix.img: $(BUILD_DIR)/os-image.bin nvfs_disk.img
 	@echo "Created $@ — dd to USB: sudo dd if=$@ of=/dev/sdX bs=512"
 
 run-qemu: $(BUILD_DIR)/os-image.bin nvfs_disk.img
-	qemu-system-x86_64 -vga std -boot order=a -drive format=raw,file=$<,if=floppy -drive file=nvfs_disk.img,format=raw,if=none,id=ata0 -device ide-hd,drive=ata0 -m 32 -smp 2 -serial mon:stdio
+	qemu-system-x86_64 -vga std -boot order=a -drive format=raw,file=$<,if=floppy -drive file=nvfs_disk.img,format=raw,if=none,id=ata0 -device ide-hd,drive=ata0 -m 128 -smp 2 -serial mon:stdio
 
 run-qemu-iso: $(BUILD_DIR)/os-image.iso nvfs_disk.img
 	qemu-system-x86_64 -vga std -boot order=d -cdrom $(BUILD_DIR)/os-image.iso \
 	  -drive file=nvfs_disk.img,format=raw,if=none,id=ata0 \
-	  -device ide-hd,drive=ata0 -smp 2 -m 32
+	  -device ide-hd,drive=ata0 -smp 2 -m 128
 
 run-qemu-nrx: noverix.img
 	qemu-system-x86_64 -vga std -smp 2 -boot order=c \
 	  -drive file=noverix.img,format=raw,if=none,id=ata0 \
-	  -device ide-hd,drive=ata0 -m 32 -serial mon:stdio
+	  -device ide-hd,drive=ata0 -m 128 -serial mon:stdio
 
 run: $(BUILD_DIR)/os-image.bin
 	bochs -q -f bochsrc.bxrc

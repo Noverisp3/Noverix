@@ -32,12 +32,18 @@ static void mark_frame(unsigned int addr)
     if (frame < total_frames) set_bit(frame);
 }
 
-void pfa_init(void)
+void pfa_init(unsigned int detected_ram)
 {
     unsigned int bss_end_addr = (unsigned int)&bss_end;
-    total_frames = MAX_MEMORY / FRAME_SIZE;
+
+    if (detected_ram > MAX_MEMORY)
+        detected_ram = MAX_MEMORY;
+    total_frames = detected_ram / FRAME_SIZE;
+
     serial_write_string("[pfa] init frames=");
     serial_write_hex(total_frames);
+    serial_write_string(" ram=");
+    serial_write_hex(detected_ram);
     serial_write_string(" bss_end=");
     serial_write_hex(bss_end_addr);
     serial_write_char('\n');

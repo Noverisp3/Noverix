@@ -16,15 +16,13 @@ start:
     mov sp, 0x7C00 - 512
     mov [boot_drive], dl
 
-    mov si, msg_loading
-    call print_string
-
     mov ax, 0x900
     mov es, ax
     xor bx, bx
     mov cx, KERNEL_SECTORS
 
     mov dl, [boot_drive]
+    ; (loading msg removed to fit 510-byte limit)
     cmp dl, 0x80
     jb .chs
 
@@ -50,37 +48,33 @@ start:
     jmp .loaded
 
 .chs:
-    mov [disk_sectors], cx
-    mov byte [sector], 2
-    mov byte [head], 0
-    mov byte [cylinder], 0
-.next_chs:
-    mov ah, 0x02
-    mov al, 1
-    mov ch, [cylinder]
-    mov dh, [head]
-    mov cl, [sector]
-    mov bx, [disk_buffer]
+    push cx
+    pop si                  ; SI = remaining sectors
+    mov cl, 2
+    xor dh, dh
+    xor ch, ch
+.chs_loop:
+    mov ax, 0x0201
     int 0x13
     jc disk_error
-    add word [disk_buffer], 512
-    jnc .sec_ok
+    add bx, 512
+    jnc .chs_next
     mov ax, es
     add ax, 0x1000
     mov es, ax
-.sec_ok:
-    dec word [disk_sectors]
-    jz .loaded
-    inc byte [sector]
-    cmp byte [sector], 19
-    jb .next_chs
-    mov byte [sector], 1
-    inc byte [head]
-    cmp byte [head], 2
-    jb .next_chs
-    mov byte [head], 0
-    inc byte [cylinder]
-    jmp .next_chs
+.chs_next:
+    inc cl
+    cmp cl, 19
+    jb .chs_track
+    mov cl, 1
+    inc dh
+    cmp dh, 2
+    jb .chs_track
+    xor dh, dh
+    inc ch
+.chs_track:
+    dec si
+    jnz .chs_loop
 
 .loaded:
     ; ── VBE init: try 800x600x24 (mode 0x115) ──
@@ -111,6 +105,37 @@ start:
 .vbe_fail:
     mov dword [0x1000], 0
 .vbe_done:
+
+    ; ── E801 extended memory detection ──
+    ; Returns:
+    ;   AX / CX = extended 1-16 MB in KB (unused; we use CX/DX)
+    ;   BX / DX = extended >16 MB in 64 KB blocks
+    ; Store total RAM in bytes at 0x100C
+    mov ax, 0xE801
+    int 0x15
+    jc .detect_88
+    cmp ah, 0x80
+    jae .detect_88
+    movzx ecx, cx
+    shl ecx, 10             ; CX * 1024
+    movzx edx, dx
+    shl edx, 16             ; DX * 65536
+    lea eax, [ecx + edx]
+    add eax, 0x100000       ; + 1 MB conventional
+    mov [0x100C], eax
+    jmp .detect_done
+.detect_88:
+    mov ah, 0x88
+    int 0x15
+    jc .detect_default
+    movzx eax, ax
+    shl eax, 10
+    add eax, 0x100000
+    mov [0x100C], eax
+    jmp .detect_done
+.detect_default:
+    mov dword [0x100C], 32 * 1024 * 1024
+.detect_done:
 
     xor ax, ax
     mov es, ax
@@ -210,13 +235,7 @@ dap_sectors:    dw 0
 dap_buf_off:    dw 0
 dap_buf_seg:    dw 0
 dap_lba:        dd 0, 0
-disk_buffer     dw 0
-disk_sectors    dw 0
-sector          db 2
-head            db 0
-cylinder        db 0
-msg_loading     db "Loading...", 13, 10, 0
-msg_disk_error  db "Disk error!", 13, 10, 0
+msg_disk_error  db "Disk!", 0
 
 times 510 - ($ - $$) db 0
 dw 0xAA55

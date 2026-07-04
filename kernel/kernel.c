@@ -591,13 +591,21 @@ static void handle_cmd(const char *buf)
 void kernel_main(void)
 {
     init_serial();
+
+    unsigned int detected_ram = *(volatile unsigned int *)0x100C;
+    serial_write_string("[boot] detected RAM=");
+    serial_write_hex(detected_ram);
+    serial_write_string(" (");
+    serial_write_int(detected_ram / (1024 * 1024));
+    serial_write_string(" MB)\n");
+
     init_gdt();
     init_idt();
     init_screen();
     init_keyboard();
     init_timer(100);
-    pfa_init();
-    init_paging();
+    pfa_init(detected_ram);
+    init_paging(detected_ram);
 
     // Paging + PFA deep test
     {

@@ -5,7 +5,7 @@
 #define PAGE_WRITE 2
 #define PAGE_USER 4
 
-void init_paging(void);
+void init_paging(unsigned int detected_ram);
 int map_page(unsigned int virt, unsigned int phys, unsigned int flags);
 int unmap_page(unsigned int virt);
 int get_page_mapping(unsigned int virt, unsigned int *phys_out);

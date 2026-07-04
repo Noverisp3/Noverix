@@ -23,7 +23,7 @@ static page_table_entry_t *create_table(unsigned int virt, unsigned int flags)
     return table;
 }
 
-void init_paging(void)
+void init_paging(unsigned int detected_ram)
 {
     serial_write_string("[paging] init\n");
 
@@ -45,9 +45,11 @@ void init_paging(void)
 
     page_dir[0] = ((unsigned int)first_pt) | PAGE_PRESENT | PAGE_WRITE;
 
-    serial_write_string("[paging] map 4-32MB\n");
+    serial_write_string("[paging] identity map 4MB-");
+    serial_write_hex(detected_ram);
+    serial_write_char('\n');
 
-    for (unsigned int virt = 0x00400000; virt < MAX_MEMORY; virt += 0x400000) {
+    for (unsigned int virt = 0x00400000; virt < detected_ram; virt += 0x400000) {
         page_table_entry_t *pt = create_table(virt, 0);
         if (!pt) return;
         for (int i = 0; i < 1024; i++)
