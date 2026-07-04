@@ -24,6 +24,7 @@ static char extended;
 static char key_buffer[BUFFER_SIZE];
 static int buffer_head;
 static int buffer_tail;
+static unsigned char typematic_param;
 
 static const char scancode_ascii[TABLE_SIZE] = {
     0, 0, '1', '2', '3', '4', '5', '6', '7', '8',
@@ -117,5 +118,21 @@ void init_keyboard(void)
     extended = 0;
     buffer_head = 0;
     buffer_tail = 0;
+    typematic_param = 0x00;
     register_interrupt_handler(33, keyboard_handler);
+    keyboard_set_typematic(0x00); // 250ms delay, 30Hz repeat
+}
+
+void keyboard_set_typematic(unsigned char param)
+{
+    while (inb(KEYBOARD_STATUS_PORT) & 0x02);
+    outb(KEYBOARD_DATA_PORT, 0xF3);
+    while (inb(KEYBOARD_STATUS_PORT) & 0x02);
+    outb(KEYBOARD_DATA_PORT, param);
+    typematic_param = param;
+}
+
+unsigned char keyboard_get_typematic(void)
+{
+    return typematic_param;
 }

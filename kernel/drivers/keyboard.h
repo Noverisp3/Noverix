@@ -9,5 +9,7 @@
 void init_keyboard(void);
 char get_char(void);
 char read_char(void);
+void keyboard_set_typematic(unsigned char param);
+unsigned char keyboard_get_typematic(void);
 
 #endif

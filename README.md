@@ -11,7 +11,7 @@ A minimal x86 hobby operating system built from scratch. Boots from real mode in
 | **NVFS** | Extent-based filesystem: superblock (sector 1), block bitmap (sectors 2–9), inode table (sectors 10–41, expandable), data blocks (sectors 42–32767). Each inode has 13 direct extents + 1 indirect block pointer (linked extents, up to 64 more extents). Shadow paging for crash-safe writes. Dynamic inode table expansion when full. File timestamps (ctime/mtime, seconds since boot) stored in inode. |
 | **VGA text mode** | 80×25 text buffer, hardware cursor, terminal scrolling, hex/dec rendering. Fallback when VBE unavailable. |
 | **VBE graphics mode** | 800×600×24bpp framebuffer (mode 0x115), bitmap font rendering (8×16), pixel-level draw, smooth scrolling. Automatic dispatch in screen driver when active. |
-| **PS/2 keyboard** | Interrupt-driven ring buffer, shift/caps, command history with arrow keys. |
+| **PS/2 keyboard** | Interrupt-driven ring buffer, shift/caps, command history with arrow keys, configurable typematic rate (PS/2 command 0xF3, `rate` shell command). |
 | **Interrupts** | IDT with 32 exception ISRs and 16 IRQs. Full register dump on exception (`ud2` crash command). |
 | **Timer (PIT)** | Tick counter via IRQ0, `sleep_ms()` for delays, `get_ticks()` for time source. |
 | **Serial I/O** | COM1 serial port — kernel logging, debug output, and shell input via `-serial stdio`. |
@@ -150,7 +150,8 @@ shutdown Power off
 | `exec` | `exec <file>` | Load and run an ELF executable from NVFS |
 | `heap` | `heap` | Dump heap allocator block state |
 | `mem` | `mem` | Show physical memory usage (total/used/free frames) |
-| `pages` | `pages` | Show page directory/table mappings |
+| `pages`    | `pages`    | Show page directory/table mappings |
+| `rate`     | `rate [delay rate]` | Show or set keyboard repeat rate (delay:0=250ms..3=1000ms, rate:0=fast..31=slow) |
 
 ## Project layout
 

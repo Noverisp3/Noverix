@@ -363,13 +363,15 @@ Project_002_OS/
 ### `kernel/drivers/keyboard.c` + `keyboard.h`
 
 - **Role:** PS/2 keyboard driver. IRQ1 handler reads scancode → ASCII → ring buffer.
-- **Static data:** `key_buffer[256]` (ring), `shift_pressed`, `caps_on`, `extended` flag
+- **Static data:** `key_buffer[256]` (ring), `shift_pressed`, `caps_on`, `extended` flag, `typematic_param`
 - **Tables:** `scancode_ascii[58]`, `scancode_ascii_shift[58]`
 - **Functions:**
   - `keyboard_handler(regs)`: Read scancode → handle extended (0xE0), shift, caps → push ASCII/keycode to ring buffer | [inb, outb]
   - `get_char(void)`: Get 1 char from ring buffer (non-blocking) | []
   - `read_char(void)`: Blocking get_char | [get_char]
-  - `init_keyboard(void)`: Reset state, register IRQ1 handler | [register_interrupt_handler]
+  - `init_keyboard(void)`: Reset state, register IRQ1 handler, set typematic to 30Hz/250ms | [register_interrupt_handler, keyboard_set_typematic]
+  - `keyboard_set_typematic(param)`: Send PS/2 command 0xF3 to configure repeat rate/delay | [inb, outb]
+  - `keyboard_get_typematic(void)`: Return current typematic parameter byte | []
 - **Import:** `ports.h`, `idt.h`
 
 ---

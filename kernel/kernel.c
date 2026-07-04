@@ -182,6 +182,7 @@ static void execute_cmd(const char *cmd, char *arg)
         print_string("mem      Show physical memory info\n");
         print_string("pages    Show page directory/table info\n");
         print_string("|        Pipe: cmd1 | cmd2 (output of cmd1 goes to cmd2)\n");
+        print_string("rate     Set keyboard repeat rate: rate <delay:0-3> <rate:0-31>\n");
     } else if (lib_strcmp(cmd, "echo") == 0) {
         int is_append = 0;
         char *redir = arg;
@@ -350,6 +351,49 @@ static void execute_cmd(const char *cmd, char *arg)
         print_string("Free memory:  "); print_int(free_frames * FRAME_SIZE / 1024); print_string(" KB\n");
     } else if (lib_strcmp(cmd, "pages") == 0) {
         dump_page_info();
+    } else if (lib_strcmp(cmd, "rate") == 0) {
+        unsigned char p = keyboard_get_typematic();
+        unsigned char delay = (p >> 5) & 3;
+        unsigned char rate = p & 0x1F;
+        if (arg[0]) {
+            unsigned int d = 0, r = 0;
+            int k = 0;
+            while (arg[k] >= '0' && arg[k] <= '9') {
+                d = d * 10 + (arg[k] - '0');
+                k++;
+            }
+            if (k == 0 || arg[k] != ' ') {
+                print_string("Usage: rate <delay:0-3> <rate:0-31>\n");
+                return;
+            }
+            while (arg[k] == ' ') k++;
+            while (arg[k] >= '0' && arg[k] <= '9') {
+                r = r * 10 + (arg[k] - '0');
+                k++;
+            }
+            if (d > 3 || r > 31) {
+                print_string("delay 0-3, rate 0-31 (0=fastest)\n");
+                return;
+            }
+            keyboard_set_typematic((unsigned char)((d << 5) | r));
+            print_string("OK\n");
+        } else {
+            print_string("delay="); print_int(delay);
+            print_string(" (");
+            switch (delay) {
+                case 0: print_string("250ms"); break;
+                case 1: print_string("500ms"); break;
+                case 2: print_string("750ms"); break;
+                case 3: print_string("1000ms"); break;
+            }
+            print_string("), rate="); print_int(rate);
+            print_string(" (");
+            if (rate <= 1) print_string("fast");
+            else if (rate <= 10) print_string("medium");
+            else if (rate <= 20) print_string("slow");
+            else print_string("very slow");
+            print_string(")\n");
+        }
     } else if (cmd[0]) {
         print_string("Unknown command: ");
         print_string(cmd);
