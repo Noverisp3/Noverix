@@ -15,6 +15,7 @@
 #include "elf.h"
 #include "lib.h"
 #include "sync/sync.h"
+#include "acpi/acpi.h"
 
 #define VBE_INFO_ADDR ((volatile unsigned int *)0x1000)
 
@@ -598,6 +599,15 @@ void kernel_main(void)
         serial_write_string(x == 99 ? " OK\n" : " FAIL\n");
         serial_write_string("  counter="); serial_write_int(counter);
         serial_write_string(counter == 42 ? " OK\n" : " FAIL\n");
+    }
+
+    {
+        serial_write_string("[test] ACPI discovery\n");
+        int n = acpi_parse_madt();
+        if (n > 0)
+            serial_write_string("[test] ACPI PASS\n");
+        else
+            serial_write_string("[test] ACPI FAIL (no MADT)\n");
     }
 
     // ── VBE init ──
