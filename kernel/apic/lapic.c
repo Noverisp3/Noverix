@@ -107,6 +107,16 @@ void lapic_send_ipi(unsigned int apic_id, unsigned int icr_low)
     while ((lapic_read(LAPIC_ICR_LOW) & (1 << 12)) && --timeout > 0);
 }
 
+/* Send IPI to all CPUs except self (dest shorthand = 11) */
+void lapic_send_ipi_all_exc_self(unsigned int vector)
+{
+    /* ICR: delivery mode = Fixed (000), shorthand = All except self (11) */
+    lapic_write(LAPIC_ICR_HIGH, 0);
+    lapic_write(LAPIC_ICR_LOW, 0x000C0000 | vector);
+    int timeout = 10000;
+    while ((lapic_read(LAPIC_ICR_LOW) & (1 << 12)) && --timeout > 0);
+}
+
 void lapic_start_ap(unsigned int apic_id, unsigned int trampoline_page)
 {
     /* Send INIT IPI (level assert) */

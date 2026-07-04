@@ -75,6 +75,9 @@ IRQ 15 47
 
 ISR_NOERR 255
 
+/* TLB shootdown IPI */
+ISR_NOERR 0x50
+
 isr_common:
     pusha
     pushl %ds

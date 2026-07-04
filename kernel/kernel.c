@@ -21,6 +21,7 @@
 #include "cpu/cpu.h"
 #include "ap_startup.h"
 #include "scheduler/scheduler.h"
+#include "sync/tlb.h"
 
 #define VBE_INFO_ADDR ((volatile unsigned int *)0x1000)
 
@@ -709,6 +710,7 @@ void kernel_main(void)
         register_interrupt_handler(0xFF, spurious_handler);
         lapic_init();
         ioapic_init();
+        tlb_init();
         serial_write_string("[test] APIC done\n");
     }
 

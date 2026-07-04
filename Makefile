@@ -7,7 +7,7 @@ LDFLAGS=-m elf_i386 -T linker.ld -Map kernel.map
 
 BUILD_DIR=build
 
-SOURCE_DIRS=kernel kernel/drivers kernel/cpu kernel/memory kernel/acpi kernel/apic kernel/scheduler
+SOURCE_DIRS=kernel kernel/drivers kernel/cpu kernel/memory kernel/acpi kernel/apic kernel/scheduler kernel/sync
 vpath %.c $(SOURCE_DIRS)
 vpath %.S $(SOURCE_DIRS)
 
@@ -35,7 +35,8 @@ KERNEL_OBJS = \
 	$(BUILD_DIR)/ioapic.o \
 	$(BUILD_DIR)/ap_startup.o \
 	$(BUILD_DIR)/ap_trampoline.o \
-	$(BUILD_DIR)/scheduler.o
+	$(BUILD_DIR)/scheduler.o \
+	$(BUILD_DIR)/tlb.o
 
 .PHONY: all clean run run-qemu iso
 
