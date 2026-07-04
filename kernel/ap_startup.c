@@ -7,6 +7,7 @@
 #include "memory/paging.h"
 #include "lib.h"
 #include "drivers/serial.h"
+#include "scheduler/scheduler.h"
 
 /* ── Trampoline binary embedded via ld -r -b binary ── */
 extern char _binary_build_ap_trampoline_bin_start[];
@@ -63,13 +64,17 @@ void ap_main(unsigned int apic_id)
     serial_write_int(cpu_id);
     serial_write_string(" ready\n");
 
+    /* Switch to per-CPU stack, enable interrupts, enter idle loop */
     __asm__ volatile (
         "mov %0, %%esp\n"
         "sti\n"
-        "1: hlt\n"
-        "jmp 1b"
         : : "r" (stack_top) : "esp"
     );
+
+    for (;;) {
+        if (!scheduler_step())
+            __asm__ volatile ("pause");
+    }
 
     /* Not reached */
     while (1);

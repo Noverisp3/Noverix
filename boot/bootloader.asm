@@ -28,15 +28,25 @@ start:
     cmp dl, 0x80
     jb .chs
 
-    mov word [dap_sectors], cx
-    mov word [dap_buf_off], bx
+    ; ── LBA read in 1-sector chunks ──
+    mov word [dap_sectors], 1
+    mov word [dap_lba], 1
     mov word [dap_buf_seg], es
-    mov dword [dap_lba], 1
-    mov dword [dap_lba + 4], 0
+.lba_loop:
+    mov word [dap_buf_off], bx
     mov ah, 0x42
     mov si, dap_start
     int 0x13
     jc disk_error
+    add bx, 512
+    jnc .lba_next
+    mov ax, es
+    add ax, 0x1000
+    mov es, ax
+    mov word [dap_buf_seg], es
+.lba_next:
+    add word [dap_lba], 1
+    loop .lba_loop
     jmp .loaded
 
 .chs:
@@ -73,9 +83,6 @@ start:
     jmp .next_chs
 
 .loaded:
-    mov si, msg_loaded
-    call print_string
-
     ; ── VBE init: try 800x600x24 (mode 0x115) ──
     xor ax, ax
     mov es, ax
@@ -208,8 +215,7 @@ disk_sectors    dw 0
 sector          db 2
 head            db 0
 cylinder        db 0
-msg_loading     db "Noverix Loading...", 13, 10, 0
-msg_loaded      db "Loaded.", 13, 10, 0
+msg_loading     db "Loading...", 13, 10, 0
 msg_disk_error  db "Disk error!", 13, 10, 0
 
 times 510 - ($ - $$) db 0

@@ -20,6 +20,7 @@
 #include "acpi/acpi.h"
 #include "cpu/cpu.h"
 #include "ap_startup.h"
+#include "scheduler/scheduler.h"
 
 #define VBE_INFO_ADDR ((volatile unsigned int *)0x1000)
 
@@ -162,6 +163,29 @@ static void readline(char *buf, int max)
     buf[len] = 0;
 }
 
+/* ── SMP scheduler test ── */
+
+struct worker_result {
+    volatile int sum;
+    volatile int cpu_id;
+};
+
+struct worker_arg {
+    int start;
+    int count;
+    struct worker_result *result;
+};
+
+static void sum_worker(void *arg)
+{
+    struct worker_arg *w = (struct worker_arg *)arg;
+    int s = 0;
+    for (int i = 0; i < w->count; i++)
+        s += w->start + i;
+    w->result->sum = s;
+    w->result->cpu_id = get_cpu_id();
+}
+
 static void execute_cmd(const char *cmd, char *arg)
 {
     if (lib_strcmp(cmd, "help") == 0 || lib_strcmp(cmd, "?") == 0) {
@@ -189,6 +213,8 @@ static void execute_cmd(const char *cmd, char *arg)
         print_string("pages    Show page directory/table info\n");
         print_string("|        Pipe: cmd1 | cmd2 (output of cmd1 goes to cmd2)\n");
         print_string("rate     Set keyboard repeat rate: rate <delay:0-3> <rate:0-31>\n");
+        print_string("smp      Run N parallel tasks across all CPUs\n");
+        print_string("cpus     Show CPU info\n");
     } else if (lib_strcmp(cmd, "echo") == 0) {
         int is_append = 0;
         char *redir = arg;
@@ -415,6 +441,52 @@ static void execute_cmd(const char *cmd, char *arg)
             else print_string(", slow");
             print_string(")\n");
         }
+    } else if (lib_strcmp(cmd, "smp") == 0) {
+        int ntasks = 4;
+        int per = 100000;
+        struct worker_arg args[4];
+        struct worker_result results[4];
+
+        print_string("Submitting ");
+        print_int(ntasks);
+        print_string(" tasks (sum 1..");
+        print_int(per);
+        print_string(" each)...\n");
+
+        for (int i = 0; i < ntasks; i++) {
+            args[i].start = 1;
+            args[i].count = per;
+            results[i].sum = 0;
+            results[i].cpu_id = -1;
+            args[i].result = &results[i];
+            scheduler_submit(sum_worker, &args[i]);
+        }
+
+        scheduler_wait_all();
+
+        print_string("Results:\n");
+        for (int i = 0; i < ntasks; i++) {
+            print_string("  task ");
+            print_int(i);
+            print_string(": sum=");
+            print_int((unsigned int)results[i].sum);
+            print_string(" (cpu ");
+            print_int((unsigned int)results[i].cpu_id);
+            print_string(")\n");
+        }
+    } else if (lib_strcmp(cmd, "cpus") == 0) {
+        print_string("CPUs: ");
+        print_int(cpu_count);
+        print_string("\n");
+        for (int i = 0; i < cpu_count; i++) {
+            print_string("  CPU ");
+            print_int(i);
+            print_string(" APIC ");
+            print_int(cpu_info[i].apic_id);
+            print_string(" state=");
+            print_int(cpu_info[i].state);
+            print_string("\n");
+        }
     } else if (cmd[0]) {
         print_string("Unknown command: ");
         print_string(cmd);
@@ -633,6 +705,7 @@ void kernel_main(void)
     }
 
     start_aps();
+    scheduler_init();
 
     // ── VBE init ──
     {

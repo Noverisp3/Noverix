@@ -7,7 +7,7 @@ LDFLAGS=-m elf_i386 -T linker.ld -Map kernel.map
 
 BUILD_DIR=build
 
-SOURCE_DIRS=kernel kernel/drivers kernel/cpu kernel/memory kernel/acpi kernel/apic
+SOURCE_DIRS=kernel kernel/drivers kernel/cpu kernel/memory kernel/acpi kernel/apic kernel/scheduler
 vpath %.c $(SOURCE_DIRS)
 vpath %.S $(SOURCE_DIRS)
 
@@ -34,7 +34,8 @@ KERNEL_OBJS = \
 	$(BUILD_DIR)/lapic.o \
 	$(BUILD_DIR)/ioapic.o \
 	$(BUILD_DIR)/ap_startup.o \
-	$(BUILD_DIR)/ap_trampoline.o
+	$(BUILD_DIR)/ap_trampoline.o \
+	$(BUILD_DIR)/scheduler.o
 
 .PHONY: all clean run run-qemu iso
 
@@ -94,7 +95,7 @@ noverix.img: $(BUILD_DIR)/os-image.bin nvfs_disk.img
 	@echo "Created $@ — dd to USB: sudo dd if=$@ of=/dev/sdX bs=512"
 
 run-qemu: $(BUILD_DIR)/os-image.bin nvfs_disk.img
-	qemu-system-x86_64 -vga std -boot order=a -drive format=raw,file=$<,if=floppy -drive file=nvfs_disk.img,format=raw,if=none,id=ata0 -device ide-hd,drive=ata0 -m 32 -smp 2
+	qemu-system-x86_64 -vga std -boot order=a -drive format=raw,file=$<,if=floppy -drive file=nvfs_disk.img,format=raw,if=none,id=ata0 -device ide-hd,drive=ata0 -m 32 -smp 2 -serial mon:stdio
 
 run-qemu-iso: $(BUILD_DIR)/os-image.iso nvfs_disk.img
 	qemu-system-x86_64 -vga std -boot order=d -cdrom $(BUILD_DIR)/os-image.iso \
@@ -104,7 +105,7 @@ run-qemu-iso: $(BUILD_DIR)/os-image.iso nvfs_disk.img
 run-qemu-nrx: noverix.img
 	qemu-system-x86_64 -vga std -smp 2 -boot order=c \
 	  -drive file=noverix.img,format=raw,if=none,id=ata0 \
-	  -device ide-hd,drive=ata0 -m 32
+	  -device ide-hd,drive=ata0 -m 32 -serial mon:stdio
 
 run: $(BUILD_DIR)/os-image.bin
 	bochs -q -f bochsrc.bxrc
