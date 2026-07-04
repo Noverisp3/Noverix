@@ -14,6 +14,7 @@
 #include "drivers/graphics.h"
 #include "elf.h"
 #include "lib.h"
+#include "sync/sync.h"
 
 #define VBE_INFO_ADDR ((volatile unsigned int *)0x1000)
 
@@ -562,6 +563,41 @@ void kernel_main(void)
 
             free_frame(phys);
         }
+    }
+
+    {
+        serial_write_string("[test] sync primitives\n");
+        spinlock_t lock;
+        spinlock_init(&lock);
+        spinlock_lock(&lock);
+        spinlock_unlock(&lock);
+        unsigned int f = spinlock_lock_irqsave(&lock);
+        spinlock_unlock_irqrestore(&lock, f);
+        serial_write_string("  spinlock OK\n");
+
+        volatile unsigned int counter = 0;
+        atomic_inc(&counter);
+        atomic_inc(&counter);
+        atomic_inc(&counter);
+        atomic_dec(&counter);
+        serial_write_string("  atomic_inc/dec="); serial_write_int(counter);
+        serial_write_string(counter == 2 ? " OK\n" : " FAIL\n");
+
+        unsigned int v = atomic_cmpxchg(&counter, 2, 99);
+        serial_write_string("  cmpxchg(old=2->99)="); serial_write_int(v);
+        serial_write_string(v == 2 ? " OK\n" : " FAIL\n");
+
+        v = atomic_cmpxchg(&counter, 2, 88);
+        serial_write_string("  cmpxchg(old=2->88)="); serial_write_int(v);
+        serial_write_string(v == 99 ? " OK\n" : " FAIL\n");
+        serial_write_string("  counter="); serial_write_int(counter);
+        serial_write_string(counter == 99 ? " OK\n" : " FAIL\n");
+
+        unsigned int x = atomic_xchg(&counter, 42);
+        serial_write_string("  xchg(->42) old="); serial_write_int(x);
+        serial_write_string(x == 99 ? " OK\n" : " FAIL\n");
+        serial_write_string("  counter="); serial_write_int(counter);
+        serial_write_string(counter == 42 ? " OK\n" : " FAIL\n");
     }
 
     // ── VBE init ──
