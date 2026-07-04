@@ -32,7 +32,9 @@ KERNEL_OBJS = \
 	$(BUILD_DIR)/rsdp.o \
 	$(BUILD_DIR)/madt.o \
 	$(BUILD_DIR)/lapic.o \
-	$(BUILD_DIR)/ioapic.o
+	$(BUILD_DIR)/ioapic.o \
+	$(BUILD_DIR)/ap_startup.o \
+	$(BUILD_DIR)/ap_trampoline.o
 
 .PHONY: all clean run run-qemu iso
 
@@ -49,6 +51,12 @@ $(BUILD_DIR)/interrupt.o: kernel/cpu/interrupt.S | $(BUILD_DIR)
 
 $(BUILD_DIR)/%.o: %.c | $(BUILD_DIR)
 	$(CC) $(CFLAGS) $< -o $@
+
+$(BUILD_DIR)/ap_trampoline.bin: boot/ap_trampoline.asm | $(BUILD_DIR)
+	$(ASM) -f bin $< -o $@
+
+$(BUILD_DIR)/ap_trampoline.o: $(BUILD_DIR)/ap_trampoline.bin | $(BUILD_DIR)
+	$(OBJCOPY) -I binary -O elf32-i386 -B i386 $< $@
 
 $(BUILD_DIR)/kernel.elf: $(KERNEL_OBJS) | $(BUILD_DIR)
 	$(LD) $(LDFLAGS) $(KERNEL_OBJS) -o $@

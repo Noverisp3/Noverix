@@ -23,12 +23,12 @@
 static volatile unsigned int *lapic;
 int apic_enabled;
 
-static unsigned int lapic_read(unsigned int reg)
+unsigned int lapic_read(unsigned int reg)
 {
     return *(lapic + reg / 4);
 }
 
-static void lapic_write(unsigned int reg, unsigned int val)
+void lapic_write(unsigned int reg, unsigned int val)
 {
     *(lapic + reg / 4) = val;
 }
@@ -93,4 +93,37 @@ void lapic_eoi(void)
 void spurious_handler(registers_t *regs)
 {
     (void)regs;
+}
+
+void lapic_send_ipi(unsigned int apic_id, unsigned int icr_low)
+{
+    lapic_write(LAPIC_ICR_HIGH, apic_id << 24);
+    lapic_write(LAPIC_ICR_LOW, icr_low);
+    int timeout = 10000;
+    while ((lapic_read(LAPIC_ICR_LOW) & (1 << 12)) && --timeout > 0);
+}
+
+void lapic_start_ap(unsigned int apic_id, unsigned int trampoline_page)
+{
+    /* Send INIT IPI (level assert) */
+    lapic_send_ipi(apic_id, 0x0000C500);
+
+    /* Wait 10ms — must NOT use sleep_ms() because the level-asserted INIT
+       blocks LAPIC delivery of the timer interrupt that sleep_ms() polls. */
+    for (volatile int i = 0; i < 5000000; i++);
+
+    /* Send INIT de-assert (completes the INIT sequence) */
+    lapic_send_ipi(apic_id, 0x00008500);
+
+    /* Wait 10ms for AP to enter wait-for-SIPI */
+    for (volatile int i = 0; i < 5000000; i++);
+
+    /* Send first SIPI */
+    lapic_send_ipi(apic_id, 0x00000600 | trampoline_page);
+
+    /* Wait ~200μs via spin loop */
+    for (volatile int i = 0; i < 100000; i++);
+
+    /* Send second SIPI */
+    lapic_send_ipi(apic_id, 0x00000600 | trampoline_page);
 }

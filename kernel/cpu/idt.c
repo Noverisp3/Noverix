@@ -355,3 +355,8 @@ void init_idt(void)
 
     __asm__ volatile ("sti");
 }
+
+void idt_install(void)
+{
+    __asm__ volatile ("lidt %0" : : "m" (idt_ptr));
+}

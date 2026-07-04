@@ -12,5 +12,6 @@ typedef void (*interrupt_handler_t)(registers_t *);
 
 void init_idt(void);
 void register_interrupt_handler(int irq, interrupt_handler_t handler);
+void idt_install(void);
 
 #endif

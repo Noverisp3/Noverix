@@ -19,6 +19,7 @@
 #include "apic/ioapic.h"
 #include "acpi/acpi.h"
 #include "cpu/cpu.h"
+#include "ap_startup.h"
 
 #define VBE_INFO_ADDR ((volatile unsigned int *)0x1000)
 
@@ -633,6 +634,8 @@ void kernel_main(void)
         outb(0xA1, 0xFF);
         serial_write_string("[test] APIC done\n");
     }
+
+    start_aps();
 
     // ── VBE init ──
     {
