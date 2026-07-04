@@ -10,11 +10,14 @@ typedef enum {
     CPU_HALTED
 } cpu_state_t;
 
+struct task;
+
 typedef struct {
     int cpu_id;
     unsigned int apic_id;
     cpu_state_t state;
     void *stack_top;
+    struct task *current_task;       /* Per-CPU running task */
 } cpu_info_t;
 
 extern int cpu_count;

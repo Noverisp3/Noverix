@@ -3,9 +3,10 @@
 #include "memory/paging.h"
 #include "cpu/cpu.h"
 #include "cpu/timer.h"
+#include "scheduler/scheduler.h"
 #include "lib.h"
 
-task_t *current_task;
+spinlock_t sched_lock;
 
 static task_t *ready_head;
 static unsigned int next_pid;
@@ -16,6 +17,7 @@ static task_t *alloc_task(void)
     if (!t) return 0;
     lib_memset(t, 0, FRAME_SIZE);
     t->pid = next_pid++;
+    t->cpu_assigned = -1;
     return t;
 }
 
@@ -54,7 +56,8 @@ task_t *task_create(void (*entry)(void))
     t->page_dir = kernel_page_dir;
     t->state = TASK_READY;
 
-    /* Add to circular ready list */
+    /* Add to circular ready list (locked) */
+    spinlock_lock(&sched_lock);
     if (!ready_head) {
         ready_head = t;
         t->next = t;
@@ -62,53 +65,103 @@ task_t *task_create(void (*entry)(void))
         t->next = ready_head->next;
         ready_head->next = t;
     }
+    spinlock_unlock(&sched_lock);
 
     return t;
 }
 
-static task_t *pick_next(void)
+/*
+ * Pick the next READY task. Called with sched_lock held.
+ * Scans the circular list, skips tasks that are RUNNING or
+ * already assigned to another CPU (cpu_assigned >= 0).
+ */
+static task_t *pick_next_locked(void)
 {
-    if (!current_task) return 0;
-    task_t *start = current_task;
-    task_t *t = current_task->next;
+    int cpu = get_cpu_id();
+    task_t *curr = cpu_info[cpu].current_task;
+    if (!curr || !ready_head) return 0;
 
-    while (t && t != start) {
-        if (t->state == TASK_READY)
+    task_t *start = curr;
+    task_t *t = curr->next;
+
+    while (t != start) {
+        if (t->state == TASK_READY && t->cpu_assigned < 0 &&
+            t->kernel_esp != 0)
             return t;
         t = t->next;
     }
-    if (current_task->state == TASK_READY || current_task->state == TASK_RUNNING)
-        return current_task;
+
+    /* Check current task as last resort */
+    if (start->state == TASK_READY && start->cpu_assigned < 0 &&
+        start->kernel_esp != 0)
+        return start;
+
     return 0;
 }
 
 unsigned int task_switch_tick(unsigned int current_esp)
 {
-    if (!current_task) return 0;
+    int cpu = get_cpu_id();
+    task_t *curr = cpu_info[cpu].current_task;
+
+    if (!curr) return 0;
     if (!task_switch_pending) return 0;
     task_switch_pending = 0;
 
-    current_task->state = TASK_READY;
-    current_task->kernel_esp = current_esp;
+    /* Save current context */
+    curr->kernel_esp = current_esp;
 
-    task_t *next = pick_next();
-    if (!next || next == current_task) {
-        current_task->state = TASK_RUNNING;
+    spinlock_lock(&sched_lock);
+
+    /* Release current task for re-scheduling */
+    curr->state = TASK_READY;
+    curr->cpu_assigned = -1;
+
+    /* Find next task */
+    task_t *next = pick_next_locked();
+
+    if (!next) {
+        /* No runnable task — keep current running */
+        curr->state = TASK_RUNNING;
+        curr->cpu_assigned = cpu;
+        spinlock_unlock(&sched_lock);
         return 0;
     }
 
-    current_task = next;
-    current_task->state = TASK_RUNNING;
+    if (next == curr) {
+        /* Same task, no switch needed */
+        curr->state = TASK_RUNNING;
+        curr->cpu_assigned = cpu;
+        spinlock_unlock(&sched_lock);
+        return 0;
+    }
 
-    if (current_task->page_dir != kernel_page_dir)
-        page_dir_switch(current_task->page_dir);
+    /* Commit to new task */
+    next->state = TASK_RUNNING;
+    next->cpu_assigned = cpu;
+    cpu_info[cpu].current_task = next;
+    spinlock_unlock(&sched_lock);
 
-    return current_task->kernel_esp;
+    if (next->page_dir != kernel_page_dir)
+        page_dir_switch(next->page_dir);
+
+    return next->kernel_esp;
+}
+
+void task_idle_loop(void)
+{
+    for (;;) {
+        if (!scheduler_step())
+            __asm__ volatile ("pause");
+    }
 }
 
 void task_init(void)
 {
-    current_task = 0;
+    int cpu = get_cpu_id();
+
+    spinlock_init(&sched_lock);
     ready_head = 0;
     next_pid = 1;
+    cpu_info[cpu].current_task = 0;
 }

@@ -5,6 +5,7 @@
 #include "apic/lapic.h"
 #include "memory/pfa.h"
 #include "memory/paging.h"
+#include "task.h"
 #include "lib.h"
 #include "drivers/serial.h"
 #include "scheduler/scheduler.h"
@@ -57,7 +58,11 @@ void ap_main(unsigned int apic_id)
     gdt_init_percpu(cpu_id);
     gdt_set_kernel_stack(cpu_id, stack_top);
 
-    /* Switch to per-CPU stack, signal running, enable interrupts, idle */
+    /* Create idle task so this AP can participate in SMP scheduling */
+    task_t *idle = task_create(task_idle_loop);
+    idle->state = TASK_RUNNING;
+    idle->cpu_assigned = cpu_id;
+    cpu_info[cpu_id].current_task = idle;
     cpu_info[cpu_id].state = CPU_RUNNING;
 
     serial_write_string("[ap] CPU ");

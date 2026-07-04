@@ -604,6 +604,8 @@ void kernel_main(void)
     serial_write_string(" MB)\n");
 
     init_gdt();
+    gdt_init_percpu(0);              /* %gs must be valid before timer starts */
+    gdt_set_kernel_stack(0, 0x90000);
     init_idt();
     init_screen();
     init_keyboard();
@@ -701,8 +703,6 @@ void kernel_main(void)
 
     {
         serial_write_string("[test] per-CPU init\n");
-        gdt_init_percpu(0);
-        gdt_set_kernel_stack(0, 0x90000);
         int my_id = get_cpu_id();
         serial_write_string("  BSP cpu_id="); serial_write_int(my_id);
         serial_write_string(my_id == 0 ? " OK\n" : " FAIL (expected 0)\n");
@@ -868,8 +868,12 @@ void kernel_main(void)
 
     debug_log("kernel_main started");
 
+    int cpu = get_cpu_id();
     task_init();
-    current_task = task_create(shell_main);
+    task_t *t = task_create(shell_main);
+    t->state = TASK_RUNNING;
+    t->cpu_assigned = cpu;
+    cpu_info[cpu].current_task = t;
 
     shell_main();
     while (1);

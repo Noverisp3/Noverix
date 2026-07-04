@@ -103,41 +103,35 @@ void lapic_send_ipi(unsigned int apic_id, unsigned int icr_low)
 {
     lapic_write(LAPIC_ICR_HIGH, apic_id << 24);
     lapic_write(LAPIC_ICR_LOW, icr_low);
-    int timeout = 10000;
-    while ((lapic_read(LAPIC_ICR_LOW) & (1 << 12)) && --timeout > 0);
 }
 
 /* Send IPI to all CPUs except self (dest shorthand = 11) */
 void lapic_send_ipi_all_exc_self(unsigned int vector)
 {
-    /* ICR: delivery mode = Fixed (000), shorthand = All except self (11) */
     lapic_write(LAPIC_ICR_HIGH, 0);
     lapic_write(LAPIC_ICR_LOW, 0x000C0000 | vector);
-    int timeout = 10000;
-    while ((lapic_read(LAPIC_ICR_LOW) & (1 << 12)) && --timeout > 0);
 }
 
 void lapic_start_ap(unsigned int apic_id, unsigned int trampoline_page)
 {
-    /* Send INIT IPI (level assert) */
+    /* Disable interrupts — the INIT IPI blocks LAPIC delivery of timer IRQs
+       and may interfere with ICR delivery on some emulated platforms. */
+    __asm__ volatile ("cli");
+
+    /* INIT level assert */
     lapic_send_ipi(apic_id, 0x0000C500);
-
-    /* Wait 10ms — must NOT use sleep_ms() because the level-asserted INIT
-       blocks LAPIC delivery of the timer interrupt that sleep_ms() polls. */
     for (volatile int i = 0; i < 5000000; i++);
 
-    /* Send INIT de-assert (completes the INIT sequence) */
+    /* INIT de-assert */
     lapic_send_ipi(apic_id, 0x00008500);
-
-    /* Wait 10ms for AP to enter wait-for-SIPI */
     for (volatile int i = 0; i < 5000000; i++);
 
-    /* Send first SIPI */
+    /* First SIPI */
     lapic_send_ipi(apic_id, 0x00000600 | trampoline_page);
-
-    /* Wait ~200μs via spin loop */
     for (volatile int i = 0; i < 100000; i++);
 
-    /* Send second SIPI */
+    /* Second SIPI */
     lapic_send_ipi(apic_id, 0x00000600 | trampoline_page);
+
+    __asm__ volatile ("sti");
 }

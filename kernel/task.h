@@ -2,6 +2,7 @@
 #define TASK_H
 
 #include "memory/paging.h"
+#include "sync/sync.h"
 
 #define TASK_FREE    0
 #define TASK_READY   1
@@ -14,16 +15,19 @@
 typedef struct task {
     unsigned int        pid;
     volatile int        state;
+    int                 cpu_assigned;    /* -1 = free, 0..MAX_CPU = assigned */
     page_dir_t          page_dir;
     unsigned int        kernel_esp;
     void               *kernel_stack_base;
     struct task        *next;
 } task_t;
 
-extern task_t *current_task;
+/* Global scheduler lock — protects ready list + cpu_assigned changes */
+extern spinlock_t sched_lock;
 
 void task_init(void);
 task_t *task_create(void (*entry)(void));
 unsigned int task_switch_tick(unsigned int current_esp);
+void task_idle_loop(void);
 
 #endif

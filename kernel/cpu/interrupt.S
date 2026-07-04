@@ -88,6 +88,7 @@ isr_common:
     mov %ax, %ds
     mov %ax, %es
     mov %ax, %fs
+    mov $0x30, %ax
     mov %ax, %gs
     pushl %esp
     call isr_handler
@@ -110,6 +111,7 @@ irq_common:
     mov %ax, %ds
     mov %ax, %es
     mov %ax, %fs
+    mov $0x30, %ax
     mov %ax, %gs
     pushl %esp
     call irq_handler

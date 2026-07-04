@@ -50,11 +50,11 @@ void ioapic_init(void)
     serial_write_int(max_entries + 1);
     serial_write_char('\n');
 
-    /* Route IRQ 0 (PIT) → vector 0x20, unmasked, dest = BSP (APIC ID 0) */
-    ioapic_set_irq(0, 0, 0x20, 0);
+    /* Route IRQ 0 (PIT) → vector 0x20, unmasked, broadcast to all CPUs */
+    ioapic_set_irq(0, 0xFF, 0x20, 0);
 
-    /* Route IRQ 1 (keyboard) → vector 0x21, unmasked, dest = BSP */
-    ioapic_set_irq(1, 0, 0x21, 0);
+    /* Route IRQ 1 (keyboard) → vector 0x21, unmasked, broadcast to all CPUs */
+    ioapic_set_irq(1, 0xFF, 0x21, 0);
 
     /* Mask all other IRQs */
     for (unsigned int i = 2; i <= max_entries; i++)
