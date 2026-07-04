@@ -20,8 +20,15 @@ BIOS
              ├─ kernel/memory/paging.c → identity map 32MB, enable CR0.PG
              ├─ kernel/drivers/graphics.c → VBE framebuffer init + draw
              ├─ kernel/memory/heap.c   → malloc/free/realloc/calloc allocator
+             ├─ kernel/acpi/rsdp.c     → RSDP scan (EBDA + BIOS ROM)
+             ├─ kernel/acpi/madt.c     → MADT parse → cpu_info[] populated
+             ├─ kernel/apic/lapic.c    → LAPIC enable, IPI send
+             ├─ kernel/apic/ioapic.c   → I/O APIC IRQ routing
+             ├─ kernel/cpu/gdt.c       → per-CPU GDT/TSS/%gs for BSP
              ├─ kernel/drivers/ata.c   → ATA probe
              ├─ kernel/drivers/nvfs.c  → mount NVFS from ATA LBA
+             ├─ kernel/cpu/ap_startup.c → start_aps() → INIT+SIPI → APs boot
+             ├─ kernel/scheduler/scheduler.c → init work queue
              └─ while(1): readline → handle_cmd → dispatch
 ```
 
@@ -34,17 +41,31 @@ BIOS
 ```
 Project_002_OS/
 ├── boot/
-│   └── bootloader.asm        # MBR: real-mode → A20 → GDT → PM trampoline
+│   ├── bootloader.asm        # MBR: real-mode → A20 → GDT → PM trampoline
+│   └── ap_trampoline.asm     # AP startup trampoline (16-bit→PM→paging→ap_main)
 ├── kernel/
 │   ├── entry.S               # Entry: BSS zero → jmp kernel_main
-│   ├── kernel.c              # Shell: readline, history, cmd dispatch, serial input
+│   ├── kernel.c              # Shell: readline, history, cmd dispatch, serial input, SMP test commands
 │   ├── lib.c / lib.h         # Shared utilities: memcpy, memset, strlen, strcpy, strcmp
+│   ├── sync/
+│   │   └── sync.h            # Spinlocks (irqsave), atomic ops, memory barriers
+│   ├── scheduler/
+│   │   ├── scheduler.c / .h  # SMP work queue: submit, step, wait_all, 64 slots
 │   ├── cpu/
-│   │   ├── gdt.c / gdt.h     # GDT (null,code,data,user_code,user_data)
-│   │   ├── idt.c / idt.h     # IDT (32 ISR + 16 IRQ), register dump
+│   │   ├── gdt.c / gdt.h     # Per-CPU GDT (7 entries: null, code, data, ucode, udata, TSS, percpu)
+│   │   ├── idt.c / idt.h     # IDT (32 ISR + 16 IRQ), register dump, APIC+pic dual EOI
 │   │   ├── interrupt.S       # ISR/IRQ stubs, common handler asm
 │   │   ├── ports.h           # inb/outb/inw/outw inline asm
 │   │   ├── timer.c / timer.h # PIT channel 0, atomic tick, sleep_ms
+│   │   ├── cpu.h             # cpu_info_t, MAX_CPU=8, get_cpu_id via %gs:0
+│   │   ├── ap_startup.c / .h # ap_main AP entry, start_aps() SIPI orchestration
+│   ├── acpi/
+│   │   ├── acpi.h            # RSDP, SDT, RSDT, MADT, Processor, IOAPIC structs
+│   │   ├── rsdp.c            # RSDP scan (EBDA 0x40:0x0E + BIOS ROM 0xE0000-0xFFFFF)
+│   │   └── madt.c            # MADT parse: count CPUs, populate cpu_info[].apic_id
+│   ├── apic/
+│   │   ├── lapic.c / lapic.h # LAPIC: enable via MSR 0x1B, EOI, IPI send
+│   │   ├── ioapic.c / .h     # I/O APIC: IRQ routing, IMCR programming
 │   ├── memory/
 │   │   ├── pfa.c / pfa.h     # Page Frame Allocator (bitmap, 32MB)
 │   │   ├── paging.c / paging.h # Paging (PD/PT, identity map, CR0.PG)
@@ -95,6 +116,7 @@ Project_002_OS/
 - **Import:** Constants `KERNEL_OFFSET=0x2000`, `KERNEL_LOAD_ADDR=0x9000`, `PM_TRAMPOLINE_ADDR=0x0500`
 - **VBE init:** After kernel load, calls INT 0x10 AX=0x4F01/CX=0x0118 (get mode info) then AX=0x4F02/BX=0x4118 (set mode 0x118 with LFB). Mode info buffer at `0x0000:0x0600` to avoid overwriting kernel load area. LFB/width/height/pitch/bpp stored at `0x1000` for kernel consumption.
 - **Notes:** Forward copy (`cld` `rep movsd`) is safe because dest (0x2000) < src (0x9000) — source is always read before dest overwrites, even when overlapping (kernel >56 sectors). Replaces the old backward copy (`std`) which corrupted the source when dest overlapped source.
+- **HDD boot:** Uses LBA (`int 0x13, ah=0x42`) reading 1 sector at a time in a loop with segment-crossing support. DAP count of 1 avoids SeaBIOS limit of ~127 sectors per call. Falls back to CHS (`int 0x13, ah=0x02`) if extended read unsupported.
 
 ---
 
@@ -120,6 +142,25 @@ Project_002_OS/
 
 ---
 
+### `kernel/sync/sync.h`
+
+- **Role:** Spinlocks, atomic operations, and memory barriers for SMP safety.
+- **Struct:**
+  - `spinlock_t`: {volatile unsigned int locked} — initialized to 0 (unlocked)
+- **Functions:**
+  - `spin_init(lock)`: Set locked=0 | []
+  - `spin_lock(lock)`: While xchg(1) spins | [xchg, barrier]
+  - `spin_unlock(lock)`: Store 0 + barrier | [barrier]
+  - `spin_lock_irqsave(lock, flags)`: `pushf; cli; spin_lock` | [spin_lock]
+  - `spin_unlock_irqrestore(lock, flags)`: `spin_unlock; popf` | [spin_unlock]
+  - `atomic_inc(var)`: `lock incl` | []
+  - `atomic_dec(var)`: `lock decl` | []
+  - `atomic_xchg(ptr, val)`: `xchg` with memory clobber | []
+  - `barrier()`: `asm volatile("" ::: "memory")` — compiler barrier | []
+- **Lock ordering:** `screen_lock → serial_lock`, `paging_lock → pfa_lock`. No circular dependencies.
+
+---
+
 ### `kernel/kernel.c`
 
 - **Role:** Main shell. Initializes all subsystems, command loop.
@@ -129,31 +170,33 @@ Project_002_OS/
    - `history_add(buf)`: Add command to history ring (16 entries), with overflow protection (shifts oldest when full) | [lib_strcpy, lib_strcmp]
    - `readline(buf, max)`: Read input from keyboard + serial (via `read_char_any`), inline editing (LEFT/RIGHT move, mid-line insert/delete), UP/DOWN history, Ctrl+C (char 0x03) cancels line and prints ^C | [read_char_any, print_string, history_add]
    - `read_char_any(void)`: Read char from keyboard (get_char) or serial (serial_read_char) — non-blocking | [get_char, serial_data_available, serial_read_char]
-   - `execute_cmd(cmd, arg)`: Dispatch parsed command (extracted from handle_cmd for pipe reuse). Echo redirection has bounds checking on `>` operator. Hex/sleep commands have integer overflow guards. Includes `exec` for ELF binaries | [lib_strcmp, print_string, clear_screen, print_hex, sleep_ms, nvfs_list, nvfs_chdir, nvfs_read, nvfs_write, nvfs_delete, nvfs_mkdir, nvfs_rmdir, reboot, shutdown, elf_exec]
+   - `execute_cmd(cmd, arg)`: Dispatch parsed command (extracted from handle_cmd for pipe reuse). Echo redirection has bounds checking on `>` operator. Hex/sleep commands have integer overflow guards. Includes `exec` for ELF binaries, `smp` for parallel task testing, `cpus` for CPU info display | [lib_strcmp, print_string, clear_screen, print_hex, print_int, sleep_ms, nvfs_list, nvfs_chdir, nvfs_read, nvfs_write, nvfs_delete, nvfs_mkdir, nvfs_rmdir, reboot, shutdown, elf_exec, scheduler_submit, scheduler_wait_all]
    - `handle_cmd(buf)`: Parse `|` pipe → split left/right → `set_capture(1)` → `execute_cmd(cmd1, arg1)` → `set_capture(0)` → copy captured output to `pipe_data` → `execute_cmd(cmd2, arg2)` | [execute_cmd, set_capture, get_capture]
-   - `kernel_main(void)`: Init sequence → shell loop | [init_serial, init_gdt, init_idt, init_screen, init_keyboard, init_timer, pfa_init, init_paging, heap_init, ata_init, nvfs_mount]
-- **Static data:** `history[HISTORY_SIZE][LINE_BUF]`, `pipe_data[4096]`, `has_pipe_data`
+   - `kernel_main(void)`: Init sequence → shell loop | [init_serial, init_gdt, init_idt, init_screen, init_keyboard, init_timer, pfa_init, init_paging, heap_init, acpi_init, lapic_init, ioapic_init, gdt_init_percpu(0), ata_init, nvfs_mount, start_aps, scheduler_init]
+ - **Static data:** `history[HISTORY_SIZE][LINE_BUF]`, `pipe_data[4096]`, `has_pipe_data`
 - **VBE init:** After paging, reads VBE info at `0x1000` (LFB, width, height, pitch, bpp). If LFB is non-zero, maps the framebuffer into page tables via `map_page()` (576 pages for 1024×768×24bpp), then calls `init_graphics()` to activate graphics mode. Falls back to text mode if LFB is zero (VBE unavailable).
-- **Import:** `lib.h`, `screen.h`, `keyboard.h`, `serial.h`, `ata.h`, `nvfs.h`, `gdt.h`, `idt.h`, `timer.h`, `ports.h`, `graphics.h`, `elf.h`
-- **New shell features over FAT16 version:** `mkdir`, `rmdir`, `cd` (with path, `..`, `./..`, `/`). Dynamic prompt showing current path (e.g. `/MYDIR$`). `>>` append operator. `|` pipe operator. `exec` for running ELF executables. Specific error messages via `nvfs_strerror(nvfs_errno)`.
+- **Import:** `lib.h`, `screen.h`, `keyboard.h`, `serial.h`, `ata.h`, `nvfs.h`, `gdt.h`, `idt.h`, `timer.h`, `ports.h`, `graphics.h`, `elf.h`, `acpi.h`, `cpu.h`, `ap_startup.h`, `scheduler.h`
+- **New shell features over FAT16 version:** `mkdir`, `rmdir`, `cd` (with path, `..`, `./..`, `/`). Dynamic prompt showing current path (e.g. `/MYDIR$`). `>>` append operator. `|` pipe operator. `exec` for running ELF executables. `smp`/`cpus` SMP diagnostics. Specific error messages via `nvfs_strerror(nvfs_errno)`.
 - **Pipe flow:** `set_capture(1)` → print_*/print_string redirect to 4KB capture buffer → `set_capture(0)` → `get_capture()` → copy to `pipe_data` → set `has_pipe_data=1` → execute cmd2 (cat/echo read pipe_data when arg is empty).
 - **Ctrl+C:** When `readline` receives char 0x03, it prints `^C\n` and returns an empty buffer.
 - **Serial input:** `readline` polls both keyboard (IRQ1 ring buffer) and COM1 serial (non-blocking poll). Allows command piping via `-serial stdio`.
 
 ---
 
-### `kernel/cpu/gdt.c` + `gdt.h`
+### `kernel/cpu/gdt.c` + `kernel/cpu/gdt.h`
 
-- **Role:** Initialize GDT with 5 entries (null, code, data, user_code, user_data). Reload segments.
-- **Struct:** `gdt_entry_t`, `gdt_ptr_t` (packed)
+- **Role:** Per-CPU GDT with 7 entries (null, code, data, user_code, user_data, TSS, per-CPU data segment). Each CPU has its own GDT with unique TSS and `%gs` base.
+- **Struct:** `gdt_entry_t` (8 bytes), `gdt_ptr_t` (packed 6 bytes), `tss_entry_t` (104 bytes)
 - **Functions:**
-  - `gdt_set_entry(num, base, limit, access, gran)`: Write descriptor | []
-  - `init_gdt(void)`: Set 5 entries → `lgdt` → inline asm reload segment regs + ljmp flush | [ports.h]
-- **Import:** `ports.h`
+  - `gdt_set_entry(num, base, limit, access, gran)`: Write 8-byte descriptor | []
+  - `init_gdt(void)`: Legacy BSP setup — flat code/data segments | []
+  - `gdt_init_percpu(cpu_id)`: Create per-CPU GDT: set 7 entries → `lgdt` → reload segment regs + ljmp → load TSS via `ltr` → set `%gs` base via MSR 0xC0000101 | [ports.h, cpu.h]
+- **Import:** `ports.h`, `cpu.h`
+- **Per-CPU data segment:** GDT entry at index 6 with base = `&cpu_info[cpu_id]`. The `%gs` segment is loaded with this base, allowing `get_cpu_id()` to read the first field of `cpu_info_t` via `%gs:0`.
 
 ---
 
-### `kernel/cpu/idt.c` + `idt.h`
+### `kernel/cpu/idt.c` + `kernel/cpu/idt.h`
 
 - **Role:** IDT with 256 entries (32 exception + 16 IRQ). PIC remap. Exception handler with full register dump.
 - **Struct/Type:**
@@ -165,11 +208,13 @@ Project_002_OS/
   - `dump_registers(regs)`: Print all regs to screen + serial | [print_hex, print_string, serial_write_hex, serial_write_string]
   - `exception_handler(regs)`: Clear screen → dump → halt | [dump_registers]
   - `isr_handler(regs)`: Dispatch to handler or `exception_handler` | []
-  - `irq_handler(regs)`: Send EOI → handler | [outb]
+  - `irq_handler(regs)`: Send EOI(s) → handler. Sends LAPIC EOI + PIC EOI when `apic_enabled` | [outb, lapic_eoi]
   - `irq_remap(void)`: PIC master+slave remap (ICW1-ICW4) | [outb]
-   - `register_interrupt_handler(irq, handler)`: Atomic pushf/cli/popf → set handler | []
+  - `register_interrupt_handler(irq_no, handler)`: Atomic pushf/cli/popf → set handler | []
   - `init_idt(void)`: Set 256 entries → LIDT → irq_remap → STI | [idt_set_entry, irq_remap]
-- **Import:** `ports.h`, `screen.h`, `serial.h`, 32 extern ISR labels + 16 extern IRQ labels (interrupt.S)
+  - `idt_install(void)`: Reload IDT for APs (LIDT only) | []
+- **Import:** `ports.h`, `screen.h`, `serial.h`, `lapic.h`, 32 extern ISR labels + 16 extern IRQ labels (interrupt.S)
+- **Dual EOI:** After APIC init, `irq_handler` sends both `lapic_eoi()` and PIC EOI (outb 0x20/0xA0) because ISA interrupts arrive via PIC → LAPIC LINT0 (ExtINT mode).
 
 ---
 
@@ -198,15 +243,48 @@ Project_002_OS/
 
 ---
 
-### `kernel/cpu/timer.c` + `timer.h`
+### `kernel/cpu/cpu.h`
+
+- **Role:** CPU information structure and `get_cpu_id()` macro for SMP.
+- **Struct:**
+  - `cpu_info_t`: {apic_id (uint), state (volatile uint), stack_top (uint), rsvd[4]} — first field is apic_id, read via `%gs:0`
+- **Constants:** `MAX_CPU=8`, `CPU_STATE_DOWN=0`, `CPU_STATE_READY=1`
+- **Global:** `cpu_info[MAX_CPU]` — per-CPU data array, indexed by logical CPU ID
+- **Inline:**
+  - `get_cpu_id(void)`: `unsigned int id; __asm__("mov %%gs:0, %0" : "=r"(id)); return id;` — reads `cpu_info[cpu_id].apic_id` via `%gs:0`
+- **Per-CPU segment:** GDT entry 6 has base = `&cpu_info[cpu_id]`. `%gs` loaded with this segment per CPU.
+
+---
+
+### `kernel/cpu/timer.c` + `kernel/cpu/timer.h`
 
 - **Role:** PIT channel 0 tick counter. `sleep_ms` function. Provides time source for file timestamps.
 - **Functions:**
   - `timer_handler(regs)`: Increment `tick_count` by 1 | []
   - `init_timer(freq)`: Set divisor, register IRQ0 handler | [outb, register_interrupt_handler]
   - `get_ticks(void)`: Return tick_count | []
-  - `sleep_ms(ms)`: Busy-wait based on tick difference | []
+  - `sleep_ms(ms)`: Busy-wait based on tick difference. Uses `pause` instead of `hlt` when APs are running (BSP may need to avoid deadlock) | []
 - **Import:** `idt.h`, `ports.h`
+
+---
+
+### `kernel/cpu/ap_startup.c` + `kernel/cpu/ap_startup.h`
+
+- **Role:** AP startup — trampoline, SIPI orchestration, `ap_main()` entry for application processors.
+- **Functions:**
+  - `start_aps(void)`: For each discovered CPU (BSP excluded): init per-CPU GDT → set `page_dir_phys` + `ap_main_addr` in trampoline data area (0x70200) → INIT assert (10ms) → INIT de-assert (10ms) → SIPI vector 0x70 (200μs) → SIPI again (200μs). Spins waiting for each AP to set state=READY (timeout ~2s) | [lapic_send_ipi, gdt_init_percpu, sleep_ms]
+  - `ap_main(unsigned int apic_id)`: Called by trampoline. Reads APIC ID from `cpu_info[]`, sets `cpu_id = index`, calls `gdt_init_percpu(cpu_id)`, `idt_install()`, `init_timer()`, allocates per-CPU stack (4KB from PFA), sets `cpu_info[cpu_id].state = CPU_STATE_READY`, enters idle loop calling `scheduler_step()` | [gdt_init_percpu, idt_install, init_timer, alloc_frame, scheduler_step, get_cpu_id]
+- **Import:** `lapic.h`, `gdt.h`, `idt.h`, `pfa.h`, `cpu.h`, `scheduler.h`, `timer.h`
+- **SIPI protocol:** INIT level-assert blocks LAPIC timer delivery — `sleep_ms` during INIT uses spin loops instead of timer wait. AP trampoline binary embedded via `ld -r -b binary`.
+
+---
+
+### `kernel/boot/ap_trampoline.asm`
+
+- **Role:** AP startup trampoline (16-bit real mode at 0x70000 → protected mode with paging → ap_main).
+- **Data area (0x70200):** `page_dir_phys` (4B), `ap_main_addr` (4B) — written by BSP before SIPI.
+- **Flow:** `org 0x70000`, set 16-bit segments → `lgdt` (trampoline GDT) → enable A20 (port 0x92) → set CR0.PE → ljmp to 32-bit → reload segments → set CR3 + CR0.PG (paging) → load `ap_main_addr` → call.
+- **Trampoline GDT:** 3 entries (null, code=0x08, data=0x10) — minimal flat GDT for transition, replaced by per-CPU GDT inside ap_main.
 
 ---
 
@@ -226,6 +304,70 @@ Project_002_OS/
   - `test_bit(frame)`: Internal — test bit | []
   - `mark_frame(addr)`: Internal — set bit for frame containing addr | [set_bit]
 - **Import:** `serial.h`, `bss_end` (linker symbol)
+
+---
+
+### `kernel/acpi/acpi.h`
+
+- **Role:** ACPI data structures for RSDP, SDT header, RSDT, MADT, Processor Local APIC, I/O APIC structs.
+- **Structs:**
+  - `rsdp_t`: {signature[8], checksum, oem[6], revision, rsdt_addr (uint)} — 20 bytes, revision=0 for ACPI v1
+  - `sdt_header_t`: {signature[4], length, revision, checksum, oem[6], oem_table[8], oem_rev, creator_id, creator_rev}
+  - `rsdt_t`: {header (sdt_header_t), entries[]} — array of uint table pointers
+  - `madt_t`: {header (sdt_header_t), lapic_addr (uint), flags (uint)} — followed by type-length-value entries
+  - `madt_entry_processor_t`: {type=0, length=6, acpi_id, apic_id, flags} — flags bit 0 = "enabled"
+  - `madt_entry_ioapic_t`: {type=1, length=12, id, addr (uint), gsi_base (uint)}
+
+---
+
+### `kernel/acpi/rsdp.c`
+
+- **Role:** Find RSDP (Root System Description Pointer) via EBDA or BIOS ROM scan.
+- **Functions:**
+  - `acpi_init(void)`: Scan EBDA address at `0x40:0x0E` → scan BIOS ROM (0xE0000–0xFFFFF) → find "RSD PTR " signature → validate checksum → return `rsdp_t*` | [lib_memcmp]
+  - `acpi_rsdp(void)`: Entry point — return found RSDP pointer or 0 | []
+- **Import:** `acpi.h`, `lib.h`, `serial.h`, `paging.h`
+- **Identity-mapping:** ACPI tables may reside above 32MB. Each table is identity-mapped via `map_page()` before reading.
+
+---
+
+### `kernel/acpi/madt.c`
+
+- **Role:** Parse MADT (Multiple APIC Description Table) to discover CPUs and I/O APIC.
+- **Global:** `cpu_count`, `cpu_info[MAX_CPU]` — populated with APIC IDs of enabled processors
+- **Functions:**
+  - `madt_parse(rsdp)`: Walk RSDT entries → find "APIC" signature → parse MADT body → for each type-0 (processor) entry with flags bit 0 set, assign `cpu_info[cpu_count++].apic_id` → identity-map I/O APIC address | [lib_memcmp, map_page]
+- **Import:** `acpi.h`, `cpu.h`, `serial.h`, `paging.h`
+
+---
+
+### `kernel/apic/lapic.c` + `kernel/apic/lapic.h`
+
+- **Role:** Local APIC driver — enable, EOI, IPI send, AP startup.
+- **Constants:** `LAPIC_BASE=0xFEE00000`, `LAPIC_MSR=0x1B`, `LAPIC_ENABLE=0x800`, `IA32_APIC_BASE=0x1B`
+- **Registers (MMIO offsets from LAPIC_BASE):**
+  - `LAPIC_ID=0x20`, `LAPIC_SVR=0xF0`, `LAPIC_EOI=0xB0`, `LAPIC_ICR_LOW=0x300`, `LAPIC_ICR_HIGH=0x310`, `LAPIC_LVT_TIMER=0x320`, `LAPIC_LVT_LINT0=0x350`, `LAPIC_LVT_LINT1=0x360`, `LAPIC_LVT_ERROR=0x370`, `LAPIC_SPURIOUS=0xF0`
+- **Functions:**
+  - `lapic_init(void)`: Map LAPIC page → read LAPIC ID → set SVR=0x1FF (spurious vec 0xFF, enable) → set LVT_LINT0=0x700 (ExtINT, not masked) → set LVT_LINT1=0x10000 (masked) → set LVT_ERROR=0x10000 (masked) → set LVT_TIMER=0x10000 (masked) → `apic_enabled=1` | [map_page, serial_write_string]
+  - `lapic_eoi(void)`: Write 0 to LAPIC_EOI | [mmio_write]
+  - `lapic_send_ipi(apic_id, vector, shorthand)`: Write ICR high (APIC ID) → ICR low (vector + trigger + delivery) → poll ICR bit 12 (delivery status) | [mmio_read, mmio_write]
+  - `apic_is_enabled(void)`: Return `apic_enabled` flag | []
+- **Import:** `paging.h`, `cpu.h`, `serial.h`
+- **LINT0 ExtINT:** QEMU routes ISA interrupts (PIT, keyboard) through PIC → LAPIC LINT0 in virtual wire mode. LINT0 must be configured as ExtINT (0x700) and PIC must stay unmasked.
+
+---
+
+### `kernel/apic/ioapic.c` + `kernel/apic/ioapic.h`
+
+- **Role:** I/O APIC driver — IRQ routing, IMCR (Interrupt Mode Control Register) programming.
+- **Constants:** `IOAPIC_BASE=0xFEC00000`, `IOAPIC_REG_INDEX=0x00`, `IOAPIC_REG_DATA=0x10`, `IOAPIC_ID=0x00`, `IOAPIC_VER=0x01`, `IOAPIC_REDIR_TBL=0x10`
+- **Functions:**
+  - `ioapic_init(void)`: Map I/O APIC page → read version → write IMCR (port 0x22/0x23, value 0x01 = PIC + APIC both receive) → route IRQ0→vector 0x20 (PIT, CPU 0) → route IRQ1→vector 0x21 (keyboard, CPU 0) → mask all other redirections | [map_page, outb, ioapic_write_redir]
+  - `ioapic_read_reg(reg)`: Select index → read data | []
+  - `ioapic_write_reg(reg, val)`: Write data | []
+  - `ioapic_write_redir(irq, vector, dest, flags)`: Set redirection entry for IRQ (two 32-bit writes) | [ioapic_write_reg]
+- **Import:** `paging.h`, `ports.h`, `serial.h`
+- **IRQ routing:** Only IRQ0 and IRQ1 are routed (to CPU 0). All other IRQs masked. APs receive no I/O APIC interrupts.
 
 ---
 
@@ -456,3 +598,21 @@ Project_002_OS/
 - **Output:** `kernel/drivers/font.h`
 - **Usage:** `python3 tools/genfont.py`
 - **Note:** Only needs to be re-run if the font changes. The generated file is committed.
+
+---
+
+### `kernel/scheduler/scheduler.c` + `kernel/scheduler/scheduler.h`
+
+- **Role:** SMP work queue scheduler — pull-based model for parallel task execution across CPUs.
+- **Constants:** `SCHEDULER_MAX_TASKS=64`
+- **Struct:**
+  - `sched_task_t`: {func (void (*)(void*)), arg (void*), state (volatile int), cpu_id (volatile int)}
+  - States: `SCHED_FREE=0`, `SCHED_SUBMITTED=1`, `SCHED_RUNNING=2`
+- **Static data:** `tasks[SCHEDULER_MAX_TASKS]`, `sched_lock` (spinlock)
+- **Functions:**
+  - `scheduler_init(void)`: Init sched_lock, clear all task slots | [spin_init]
+  - `scheduler_submit(func, arg)`: Find free slot → set func+arg → state = SUBMITTED | [spin_lock_irqsave, spin_unlock_irqrestore]
+  - `scheduler_step(void)`: Scan for SUBMITTED → CAS to RUNNING → execute → state = FREE. Returns 1 if ran, 0 if nothing to do | [atomic_xchg]
+  - `scheduler_wait_all(void)`: Spin (calling scheduler_step to also process tasks) until all submitted tasks are FREE. BSP participates in work execution during wait | [scheduler_step]
+- **Import:** `sync.h`
+- **Usage:** BSP submits tasks, any idle CPU picks them. `smp` shell command submits 4 sum tasks. AP idle loop calls `scheduler_step()` in a `pause` loop.
