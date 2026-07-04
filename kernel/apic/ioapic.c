@@ -60,5 +60,9 @@ void ioapic_init(void)
     for (unsigned int i = 2; i <= max_entries; i++)
         ioapic_set_irq(i, 0, 0, 1);
 
+    /* Program IMCR to route interrupts through APIC (not PIC) */
+    outb(0x22, 0x70);
+    outb(0x23, 1);
+
     serial_write_string("[apic] I/O APIC OK\n");
 }

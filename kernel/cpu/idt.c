@@ -254,6 +254,10 @@ void irq_handler(registers_t *regs)
 
     if (apic_enabled) {
         lapic_eoi();
+        /* PIC EOI needed for ExtINT (LINT0) delivery */
+        if (regs->int_no >= 40)
+            outb(0xA0, 0x20);
+        outb(0x20, 0x20);
     } else {
         if (regs->int_no >= 40)
             outb(0xA0, 0x20);

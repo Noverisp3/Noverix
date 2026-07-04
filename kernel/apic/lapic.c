@@ -66,11 +66,15 @@ void lapic_init(void)
     /* Task priority = 0 (allow all interrupts) */
     lapic_write(LAPIC_TPR, 0);
 
-    /* Mask all LVT entries */
+    /* Mask LVT timer and error */
     lapic_write(LAPIC_LVT_TIMER, 0x00010000);   /* masked */
-    lapic_write(LAPIC_LVT_LINT0, 0x00010000);   /* masked */
-    lapic_write(LAPIC_LVT_LINT1, 0x00010000);   /* masked */
     lapic_write(LAPIC_LVT_ERROR, 0x00010000);   /* masked */
+
+    /* LINT0 = ExtINT mode (virtual wire: PIC interrupts delivered through LAPIC) */
+    lapic_write(LAPIC_LVT_LINT0, 0x00000700);   /* ExtINT, unmasked */
+
+    /* LINT1 = NMI */
+    lapic_write(LAPIC_LVT_LINT1, 0x00000400);   /* NMI, unmasked */
 
     /* Read APIC ID to verify */
     unsigned int id = lapic_read(LAPIC_ID);

@@ -256,7 +256,7 @@ static void execute_cmd(const char *cmd, char *arg)
         }
         if (n > 0 && n <= 10000) {
             print_string("Sleeping ");
-            print_hex(n);
+            print_int(n);
             print_string(" ms...\n");
             sleep_ms(n);
             print_string("Done.\n");
@@ -629,9 +629,6 @@ void kernel_main(void)
         register_interrupt_handler(0xFF, spurious_handler);
         lapic_init();
         ioapic_init();
-        /* Mask PIC after I/O APIC takes over */
-        outb(0x21, 0xFF);
-        outb(0xA1, 0xFF);
         serial_write_string("[test] APIC done\n");
     }
 
