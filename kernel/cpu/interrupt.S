@@ -75,6 +75,34 @@ IRQ 15 47
 
 ISR_NOERR 255
 
+/* Syscall interrupt (int 0x80) */
+.globl isr128
+isr128:
+    pushl $0
+    pushl $128
+    pusha
+    pushl %ds
+    pushl %es
+    pushl %fs
+    pushl %gs
+    mov $0x10, %ax
+    mov %ax, %ds
+    mov %ax, %es
+    mov %ax, %fs
+    mov $0x30, %ax
+    mov %ax, %gs
+    pushl %esp
+    call syscall_handler
+    addl $4, %esp
+    mov %eax, %esp
+    popl %gs
+    popl %fs
+    popl %es
+    popl %ds
+    popa
+    addl $8, %esp
+    iret
+
 /* TLB shootdown IPI */
 ISR_NOERR 0x50
 

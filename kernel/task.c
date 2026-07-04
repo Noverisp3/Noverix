@@ -2,16 +2,18 @@
 #include "memory/pfa.h"
 #include "memory/paging.h"
 #include "cpu/cpu.h"
+#include "cpu/gdt.h"
 #include "cpu/timer.h"
 #include "scheduler/scheduler.h"
+#include "drivers/serial.h"
 #include "lib.h"
 
 spinlock_t sched_lock;
 
-static task_t *ready_head;
+task_t *ready_head;
 static unsigned int next_pid;
 
-static task_t *alloc_task(void)
+task_t *alloc_task(void)
 {
     task_t *t = (task_t *)alloc_frame();
     if (!t) return 0;
@@ -142,8 +144,25 @@ unsigned int task_switch_tick(unsigned int current_esp)
     cpu_info[cpu].current_task = next;
     spinlock_unlock(&sched_lock);
 
+    gdt_set_kernel_stack(cpu, (unsigned int)next->kernel_stack_base + TASK_STACK_SIZE);
+
     if (next->page_dir != kernel_page_dir)
         page_dir_switch(next->page_dir);
+
+    /* Debug: check the EIP in the new task's frame */
+    {
+        unsigned int *frame = (unsigned int *)next->kernel_esp;
+        serial_write_string("[sched] switch to pid=");
+        serial_write_int(next->pid);
+        serial_write_string(" kernel_esp=");
+        serial_write_hex(next->kernel_esp);
+        /* EIP is at offset 56 (14 * 4) from kernel_esp in the register frame */
+        serial_write_string(" EIP=");
+        serial_write_hex(frame[14]);
+        serial_write_string(" CS=");
+        serial_write_hex(frame[15]);
+        serial_write_string("\n");
+    }
 
     return next->kernel_esp;
 }

@@ -167,6 +167,25 @@ unsigned int read_cr0(void)
     return val;
 }
 
+void page_dir_add_user_flag(page_dir_t dir)
+{
+    for (int i = 0; i < 1024; i++) {
+        if (!(dir[i] & PAGE_PRESENT))
+            continue;
+        dir[i] |= PAGE_USER;
+        page_table_entry_t *table = (page_table_entry_t *)(dir[i] & 0xFFFFF000);
+        for (int j = 0; j < 1024; j++) {
+            if (table[j] & PAGE_PRESENT)
+                table[j] |= PAGE_USER;
+        }
+    }
+}
+
+void paging_enable_user_access(void)
+{
+    page_dir_add_user_flag(kernel_page_dir);
+}
+
 void dump_page_info(void)
 {
     unsigned int flags_save = spinlock_lock_irqsave(&paging_lock);

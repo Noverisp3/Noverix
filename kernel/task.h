@@ -25,6 +25,10 @@ typedef struct task {
 /* Global scheduler lock — protects ready list + cpu_assigned changes */
 extern spinlock_t sched_lock;
 
+/* Ready list head + allocator (used by elf.c for user task creation) */
+extern task_t *ready_head;
+task_t *alloc_task(void);
+
 void task_init(void);
 task_t *task_create(void (*entry)(void));
 unsigned int task_switch_tick(unsigned int current_esp);

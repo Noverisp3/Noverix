@@ -54,11 +54,12 @@ static void keyboard_handler(registers_t *regs)
     if (!(status & 0x01)) return;
     scan_code = inb(KEYBOARD_DATA_PORT);
 
-    unsigned int flags = spinlock_lock_irqsave(&kb_lock);
+    if (!spinlock_try_lock(&kb_lock))
+        return;
 
     if (scan_code == EXTENDED_PREFIX) {
         extended = 1;
-        spinlock_unlock_irqrestore(&kb_lock, flags);
+        spinlock_unlock(&kb_lock);
         return;
     }
     if (extended) {
@@ -77,7 +78,7 @@ static void keyboard_handler(registers_t *regs)
                 }
             }
         }
-        spinlock_unlock_irqrestore(&kb_lock, flags);
+        spinlock_unlock(&kb_lock);
         return;
     }
     if (scan_code == LSHIFT_DOWN || scan_code == RSHIFT_DOWN)
@@ -100,7 +101,7 @@ static void keyboard_handler(registers_t *regs)
             }
         }
     }
-    spinlock_unlock_irqrestore(&kb_lock, flags);
+    spinlock_unlock(&kb_lock);
 }
 
 char get_char(void)
@@ -120,6 +121,27 @@ char read_char(void)
 {
     char c;
     while ((c = get_char()) == 0);
+    return c;
+}
+
+/* Ring-3-safe wrappers (no cli) */
+char get_char_user(void)
+{
+    spinlock_lock(&kb_lock);
+    if (buffer_head == buffer_tail) {
+        spinlock_unlock(&kb_lock);
+        return 0;
+    }
+    char c = key_buffer[buffer_tail];
+    buffer_tail = (buffer_tail + 1) % BUFFER_SIZE;
+    spinlock_unlock(&kb_lock);
+    return c;
+}
+
+char read_char_user(void)
+{
+    char c;
+    while ((c = get_char_user()) == 0);
     return c;
 }
 

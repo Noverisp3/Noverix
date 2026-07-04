@@ -39,6 +39,7 @@ typedef struct {
     int (*nvfs_list)(const char *path);
     const char* (*nvfs_strerror)(int err);
     int (*nvfs_is_mounted)(void);
+    void (*exit)(void);
 } noverix_api_t;
 
 #endif

@@ -34,6 +34,9 @@ typedef struct {
     unsigned int p_align;
 } __attribute__((packed)) elf32_phdr_t;
 
+#include "cpu/idt.h"
+
 int elf_exec(const char *path);
+unsigned int syscall_handler(registers_t *regs);
 
 #endif

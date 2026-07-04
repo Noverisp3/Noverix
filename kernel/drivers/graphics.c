@@ -72,8 +72,8 @@ void draw_char_gfx(int x, int y, unsigned char c, unsigned int fg, unsigned int 
     }
 }
 
-int fb_cols(void) { return fb_width / FONT_WIDTH; }
-int fb_rows(void) { return fb_height / FONT_HEIGHT; }
+int fb_cols(void) { return fb_width; }
+int fb_rows(void) { return fb_height; }
 
 void scroll_gfx(int lines)
 {

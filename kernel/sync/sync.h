@@ -30,6 +30,18 @@ static inline void spinlock_lock(spinlock_t *lock)
     }
 }
 
+static inline int spinlock_try_lock(spinlock_t *lock)
+{
+    unsigned int old = 1;
+    __asm__ volatile (
+        "xchgl %0, %1"
+        : "+r" (old), "+m" (lock->locked)
+        :
+        : "memory"
+    );
+    return old == 0;
+}
+
 static inline void spinlock_unlock(spinlock_t *lock)
 {
     __asm__ volatile (

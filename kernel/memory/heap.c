@@ -299,3 +299,27 @@ void heap_walk(void)
     heap_walk_impl();
     spinlock_unlock_irqrestore(&heap_lock, f);
 }
+
+/* Ring-3-safe wrappers (no cli) */
+void *malloc_user(unsigned int size)
+{
+    spinlock_lock(&heap_lock);
+    void *p = malloc_impl(size);
+    spinlock_unlock(&heap_lock);
+    return p;
+}
+
+void *realloc_user(void *ptr, unsigned int size)
+{
+    spinlock_lock(&heap_lock);
+    void *p = realloc_impl(ptr, size);
+    spinlock_unlock(&heap_lock);
+    return p;
+}
+
+void free_user(void *ptr)
+{
+    spinlock_lock(&heap_lock);
+    free_impl(ptr);
+    spinlock_unlock(&heap_lock);
+}

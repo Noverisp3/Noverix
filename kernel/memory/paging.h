@@ -22,5 +22,7 @@ int get_page_mapping(unsigned int virt, unsigned int *phys_out);
 unsigned int read_cr3(void);
 unsigned int read_cr0(void);
 void dump_page_info(void);
+void page_dir_add_user_flag(page_dir_t dir);
+void paging_enable_user_access(void);
 
 #endif

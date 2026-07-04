@@ -72,6 +72,7 @@ extern void irq14(void);
 extern void irq15(void);
 extern void isr255(void);
 extern void isr0x50(void);
+extern void isr128(void);
 
 static void idt_set_entry(unsigned char num, unsigned int base, unsigned short sel, unsigned char flags)
 {
@@ -354,6 +355,7 @@ void init_idt(void)
     idt_set_entry(47, (unsigned int)irq15, 0x08, 0x8E);
     idt_set_entry(255, (unsigned int)isr255, 0x08, 0x8E);
     idt_set_entry(0x50, (unsigned int)isr0x50, 0x08, 0x8E);
+    idt_set_entry(128, (unsigned int)isr128, 0x08, 0xEE);
 
     __asm__ volatile ("lidt %0" : : "m" (idt_ptr));
 

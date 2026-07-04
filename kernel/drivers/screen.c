@@ -54,7 +54,7 @@ static void set_cursor_impl(int x, int y)
 static void clear_screen_impl(void)
 {
     if (is_graphics_active()) {
-        fill_rect(0, 0, fb_cols() * FONT_WIDTH, fb_rows() * FONT_HEIGHT, GFX_BG);
+        fill_rect(0, 0, fb_cols(), fb_rows(), GFX_BG);
         cursor_x = 0;
         cursor_y = 0;
         return;
@@ -117,15 +117,15 @@ static void print_char_impl(char c)
             if (cursor_x > 0) cursor_x--;
         } else if (c == '\r') {
             cursor_x = 0;
-            fill_rect(0, cursor_y * FONT_HEIGHT, fb_cols() * FONT_WIDTH, FONT_HEIGHT, GFX_BG);
+            fill_rect(0, cursor_y * FONT_HEIGHT, fb_cols(), FONT_HEIGHT, GFX_BG);
         } else if (c == '\t') {
             cursor_x = (cursor_x + 8) & ~7;
         } else if (c >= ' ') {
             draw_char_gfx(cursor_x * FONT_WIDTH, cursor_y * FONT_HEIGHT, (unsigned char)c, GFX_FG, GFX_BG);
             cursor_x++;
         }
-        int max_cols = fb_cols();
-        int max_rows = fb_rows();
+        int max_cols = fb_cols() / FONT_WIDTH;
+        int max_rows = fb_rows() / FONT_HEIGHT;
         if (cursor_x >= max_cols) { cursor_x = 0; cursor_y++; }
         if (cursor_y >= max_rows) { scroll_gfx(1); cursor_y = max_rows - 1; }
         return;
@@ -221,3 +221,80 @@ void print_int(unsigned int num)
 
 int get_cursor_x(void) { return cursor_x; }
 int get_cursor_y(void) { return cursor_y; }
+
+/* Ring-3-safe wrappers (no cli) */
+void clear_screen_user(void)
+{
+    spinlock_lock(&screen_lock);
+    clear_screen_impl();
+    spinlock_unlock(&screen_lock);
+}
+
+void set_cursor_user(int x, int y)
+{
+    spinlock_lock(&screen_lock);
+    set_cursor_impl(x, y);
+    spinlock_unlock(&screen_lock);
+}
+
+void print_char_user(char c)
+{
+    spinlock_lock(&screen_lock);
+    print_char_impl(c);
+    spinlock_unlock(&screen_lock);
+}
+
+void print_string_user(const char *str)
+{
+    spinlock_lock(&screen_lock);
+    if (!capture_mode)
+        serial_write_string(str);
+    while (*str)
+        print_char_impl(*str++);
+    spinlock_unlock(&screen_lock);
+}
+
+void print_hex_user(unsigned int num)
+{
+    char hex[11];
+    int i;
+    unsigned int orig = num;
+    hex[0] = '0';
+    hex[1] = 'x';
+    for (i = 9; i >= 2; i--) {
+        unsigned char nibble = (unsigned char)(num & 0x0F);
+        hex[i] = nibble < 10 ? '0' + nibble : 'A' + nibble - 10;
+        num >>= 4;
+    }
+    hex[10] = '\0';
+    spinlock_lock(&screen_lock);
+    serial_write_hex(orig);
+    for (char *p = hex; *p; p++)
+        print_char_impl(*p);
+    spinlock_unlock(&screen_lock);
+}
+
+void print_int_user(unsigned int num)
+{
+    char buf[12];
+    int i = 11;
+    unsigned int orig = num;
+    buf[11] = 0;
+    if (num == 0) {
+        spinlock_lock(&screen_lock);
+        serial_write_int(0);
+        print_char_impl('0');
+        spinlock_unlock(&screen_lock);
+        return;
+    }
+    while (num && i > 0) {
+        i--;
+        buf[i] = '0' + (num % 10);
+        num /= 10;
+    }
+    spinlock_lock(&screen_lock);
+    serial_write_int(orig);
+    for (char *p = buf + i; *p; p++)
+        print_char_impl(*p);
+    spinlock_unlock(&screen_lock);
+}

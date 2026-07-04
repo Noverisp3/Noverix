@@ -612,6 +612,7 @@ void kernel_main(void)
     init_timer(100);
     pfa_init(detected_ram);
     init_paging(detected_ram);
+    paging_enable_user_access();
 
     // Paging + PFA deep test
     {
@@ -740,7 +741,7 @@ void kernel_main(void)
             serial_write_string("[vbe] mapping "); serial_write_hex(pages);
             serial_write_string(" pages for framebuffer\n");
             for (unsigned int i = 0; i < pages; i++) {
-                map_page(lfb + i * 0x1000, lfb + i * 0x1000, PAGE_WRITE);
+                map_page(lfb + i * 0x1000, lfb + i * 0x1000, PAGE_WRITE | PAGE_USER);
             }
             init_graphics(lfb, vbe_w, vbe_h, vbe_p, vbe_bpp);
             clear_screen();
