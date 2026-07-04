@@ -178,6 +178,7 @@ void print_hex(unsigned int num)
 {
     char hex[11];
     int i;
+    unsigned int orig = num;
     hex[0] = '0';
     hex[1] = 'x';
     for (i = 9; i >= 2; i--) {
@@ -187,6 +188,7 @@ void print_hex(unsigned int num)
     }
     hex[10] = '\0';
     unsigned int flags = spinlock_lock_irqsave(&screen_lock);
+    serial_write_hex(orig);
     for (char *p = hex; *p; p++)
         print_char_impl(*p);
     spinlock_unlock_irqrestore(&screen_lock, flags);
@@ -196,9 +198,11 @@ void print_int(unsigned int num)
 {
     char buf[12];
     int i = 11;
+    unsigned int orig = num;
     buf[11] = 0;
     if (num == 0) {
         unsigned int flags = spinlock_lock_irqsave(&screen_lock);
+        serial_write_int(0);
         print_char_impl('0');
         spinlock_unlock_irqrestore(&screen_lock, flags);
         return;
@@ -209,6 +213,7 @@ void print_int(unsigned int num)
         num /= 10;
     }
     unsigned int flags = spinlock_lock_irqsave(&screen_lock);
+    serial_write_int(orig);
     for (char *p = buf + i; *p; p++)
         print_char_impl(*p);
     spinlock_unlock_irqrestore(&screen_lock, flags);
