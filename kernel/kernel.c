@@ -343,12 +343,24 @@ static void execute_cmd(const char *cmd, char *arg)
         unsigned total = MAX_MEMORY;
         unsigned used = total / FRAME_SIZE - get_free_frame_count();
         unsigned free_frames = get_free_frame_count();
-        print_string("Total memory: "); print_int(total / 1024); print_string(" KB\n");
+        unsigned total_kb = total / 1024;
+        unsigned free_kb = free_frames * FRAME_SIZE / 1024;
+        print_string("Total memory: ");
+        if (total_kb >= 1024) { print_int(total_kb / 1024); print_string(" MB ("); print_int(total_kb); print_string(" KB)\n"); }
+        else { print_int(total_kb); print_string(" KB\n"); }
         print_string("Frame size:   "); print_int(FRAME_SIZE); print_string(" bytes\n");
         print_string("Total frames: "); print_int(total / FRAME_SIZE); print_string("\n");
-        print_string("Used frames:  "); print_int(used); print_string("\n");
-        print_string("Free frames:  "); print_int(free_frames); print_string("\n");
-        print_string("Free memory:  "); print_int(free_frames * FRAME_SIZE / 1024); print_string(" KB\n");
+        print_string("Used frames:  "); print_int(used); print_string(" (");
+        if (total) { unsigned pct = used * 100 / (total / FRAME_SIZE); print_int(pct); print_string("%");
+        } else print_string("0%");
+        print_string(")\n");
+        print_string("Free frames:  "); print_int(free_frames); print_string(" (");
+        if (total) { unsigned pct = free_frames * 100 / (total / FRAME_SIZE); print_int(pct); print_string("%");
+        } else print_string("0%");
+        print_string(")\n");
+        print_string("Free memory:  ");
+        if (free_kb >= 1024) { print_int(free_kb / 1024); print_string(" MB ("); print_int(free_kb); print_string(" KB)\n"); }
+        else { print_int(free_kb); print_string(" KB\n"); }
     } else if (lib_strcmp(cmd, "pages") == 0) {
         dump_page_info();
     } else if (lib_strcmp(cmd, "rate") == 0) {
@@ -388,10 +400,13 @@ static void execute_cmd(const char *cmd, char *arg)
             }
             print_string("), rate="); print_int(rate);
             print_string(" (");
-            if (rate <= 1) print_string("fast");
-            else if (rate <= 10) print_string("medium");
-            else if (rate <= 20) print_string("slow");
-            else print_string("very slow");
+            unsigned int hz = 250 / (8 + rate);
+            print_int(hz);
+            print_string(" Hz");
+            if (rate <= 1) print_string(", fastest");
+            else if (rate <= 10) print_string(", fast");
+            else if (rate <= 20) print_string(", medium");
+            else print_string(", slow");
             print_string(")\n");
         }
     } else if (cmd[0]) {
