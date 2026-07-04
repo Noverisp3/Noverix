@@ -5,6 +5,8 @@
 #define HEAP_SIZE  0x00200000
 
 void heap_init(void);
+
+/* Thread-safe public API (acquires heap_lock internally) */
 void *malloc(unsigned int size);
 void *realloc(void *ptr, unsigned int size);
 void *calloc(unsigned int num, unsigned int size);

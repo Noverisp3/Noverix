@@ -1,11 +1,20 @@
 #include "heap.h"
 #include "../drivers/serial.h"
 #include "../lib.h"
+#include "../sync/sync.h"
 
 #define HEADER_SIZE 4
 #define FOOTER_SIZE 4
 #define MIN_BLOCK (HEADER_SIZE + FOOTER_SIZE + 4)
 #define ALIGN 4
+
+static spinlock_t heap_lock = SPINLOCK_INIT;
+
+static void *malloc_impl(unsigned int size);
+static void *realloc_impl(void *ptr, unsigned int size);
+static void *calloc_impl(unsigned int num, unsigned int size);
+static void free_impl(void *ptr);
+static void heap_walk_impl(void);
 
 static void set_footer(unsigned int addr, unsigned int size)
 {
@@ -26,7 +35,7 @@ void heap_init(void)
     serial_write_char('\n');
 }
 
-void *malloc(unsigned int size)
+static void *malloc_impl(unsigned int size)
 {
     if (size == 0)
         return 0;
@@ -81,14 +90,14 @@ void *malloc(unsigned int size)
     return 0;
 }
 
-void *realloc(void *ptr, unsigned int size)
+void *realloc_impl(void *ptr, unsigned int size)
 {
     if (!ptr)
-        return malloc(size);
+        return malloc_impl(size);
 
     if (size == 0)
     {
-        free(ptr);
+        free_impl(ptr);
         return 0;
     }
 
@@ -128,7 +137,7 @@ void *realloc(void *ptr, unsigned int size)
         return ptr;
     }
 
-    void *new_ptr = malloc(size);
+    void *new_ptr = malloc_impl(size);
     if (!new_ptr)
         return 0;
 
@@ -138,11 +147,11 @@ void *realloc(void *ptr, unsigned int size)
     for (unsigned int i = 0; i < copy_size; i++)
         d[i] = s[i];
 
-    free(ptr);
+    free_impl(ptr);
     return new_ptr;
 }
 
-void free(void *ptr)
+void free_impl(void *ptr)
 {
     if (!ptr)
         return;
@@ -204,16 +213,16 @@ void free(void *ptr)
     }
 }
 
-void *calloc(unsigned int num, unsigned int size)
+void *calloc_impl(unsigned int num, unsigned int size)
 {
     unsigned int total = num * size;
-    void *ptr = malloc(total);
+    void *ptr = malloc_impl(total);
     if (ptr)
         lib_memset(ptr, 0, total);
     return ptr;
 }
 
-void heap_walk(void)
+void heap_walk_impl(void)
 {
     unsigned int addr = HEAP_START;
     unsigned int total_free = 0, total_used = 0, blocks = 0;
@@ -249,4 +258,44 @@ void heap_walk(void)
     serial_write_string(" used=");
     serial_write_hex(total_used);
     serial_write_char('\n');
+}
+
+/* ── Public SMP-safe wrappers ── */
+
+void *malloc(unsigned int size)
+{
+    unsigned int f = spinlock_lock_irqsave(&heap_lock);
+    void *p = malloc_impl(size);
+    spinlock_unlock_irqrestore(&heap_lock, f);
+    return p;
+}
+
+void *realloc(void *ptr, unsigned int size)
+{
+    unsigned int f = spinlock_lock_irqsave(&heap_lock);
+    void *p = realloc_impl(ptr, size);
+    spinlock_unlock_irqrestore(&heap_lock, f);
+    return p;
+}
+
+void *calloc(unsigned int num, unsigned int size)
+{
+    unsigned int f = spinlock_lock_irqsave(&heap_lock);
+    void *p = calloc_impl(num, size);
+    spinlock_unlock_irqrestore(&heap_lock, f);
+    return p;
+}
+
+void free(void *ptr)
+{
+    unsigned int f = spinlock_lock_irqsave(&heap_lock);
+    free_impl(ptr);
+    spinlock_unlock_irqrestore(&heap_lock, f);
+}
+
+void heap_walk(void)
+{
+    unsigned int f = spinlock_lock_irqsave(&heap_lock);
+    heap_walk_impl();
+    spinlock_unlock_irqrestore(&heap_lock, f);
 }

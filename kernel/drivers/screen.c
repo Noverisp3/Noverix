@@ -3,6 +3,9 @@
 #include "graphics.h"
 #include "font.h"
 #include "../cpu/ports.h"
+#include "../sync/sync.h"
+
+static spinlock_t screen_lock = SPINLOCK_INIT;
 
 #define GFX_FG 0x00C0C0C0
 #define GFX_BG 0x00000000
@@ -35,7 +38,20 @@ const char *get_capture(void)
     return capture_buf;
 }
 
-void clear_screen(void)
+static void set_cursor_impl(int x, int y)
+{
+    cursor_x = x;
+    cursor_y = y;
+    if (!is_graphics_active()) {
+        unsigned short pos = y * MAX_COLS + x;
+        outb(0x3D4, 0x0F);
+        outb(0x3D5, (unsigned char)(pos & 0xFF));
+        outb(0x3D4, 0x0E);
+        outb(0x3D5, (unsigned char)((pos >> 8) & 0xFF));
+    }
+}
+
+static void clear_screen_impl(void)
 {
     if (is_graphics_active()) {
         fill_rect(0, 0, fb_cols() * FONT_WIDTH, fb_rows() * FONT_HEIGHT, GFX_BG);
@@ -49,7 +65,14 @@ void clear_screen(void)
         video[i] = (WHITE_ON_BLACK << 8) | ' ';
     cursor_x = 0;
     cursor_y = 0;
-    set_cursor(0, 0);
+    set_cursor_impl(0, 0);
+}
+
+void clear_screen(void)
+{
+    unsigned int flags = spinlock_lock_irqsave(&screen_lock);
+    clear_screen_impl();
+    spinlock_unlock_irqrestore(&screen_lock, flags);
 }
 
 void init_screen(void)
@@ -59,15 +82,9 @@ void init_screen(void)
 
 void set_cursor(int x, int y)
 {
-    cursor_x = x;
-    cursor_y = y;
-    if (!is_graphics_active()) {
-        unsigned short pos = y * MAX_COLS + x;
-        outb(0x3D4, 0x0F);
-        outb(0x3D5, (unsigned char)(pos & 0xFF));
-        outb(0x3D4, 0x0E);
-        outb(0x3D5, (unsigned char)((pos >> 8) & 0xFF));
-    }
+    unsigned int flags = spinlock_lock_irqsave(&screen_lock);
+    set_cursor_impl(x, y);
+    spinlock_unlock_irqrestore(&screen_lock, flags);
 }
 
 static void scroll(void)
@@ -81,7 +98,7 @@ static void scroll(void)
     cursor_y = MAX_ROWS - 1;
 }
 
-void print_char(char c)
+static void print_char_impl(char c)
 {
     if (capture_mode) {
         if (c == '\n') {
@@ -123,7 +140,7 @@ void print_char(char c)
         cursor_x = 0;
         for (int i = 0; i < MAX_COLS; i++)
             video[cursor_y * MAX_COLS + i] = (WHITE_ON_BLACK << 8) | ' ';
-        set_cursor(cursor_x, cursor_y);
+        set_cursor_impl(cursor_x, cursor_y);
         return;
     } else if (c == '\t') {
         cursor_x = (cursor_x + 8) & ~7;
@@ -137,15 +154,24 @@ void print_char(char c)
     }
     if (cursor_y >= MAX_ROWS)
         scroll();
-    set_cursor(cursor_x, cursor_y);
+    set_cursor_impl(cursor_x, cursor_y);
+}
+
+void print_char(char c)
+{
+    unsigned int flags = spinlock_lock_irqsave(&screen_lock);
+    print_char_impl(c);
+    spinlock_unlock_irqrestore(&screen_lock, flags);
 }
 
 void print_string(const char *str)
 {
+    unsigned int flags = spinlock_lock_irqsave(&screen_lock);
     if (!capture_mode)
         serial_write_string(str);
     while (*str)
-        print_char(*str++);
+        print_char_impl(*str++);
+    spinlock_unlock_irqrestore(&screen_lock, flags);
 }
 
 void print_hex(unsigned int num)
@@ -160,7 +186,10 @@ void print_hex(unsigned int num)
         num >>= 4;
     }
     hex[10] = '\0';
-    print_string(hex);
+    unsigned int flags = spinlock_lock_irqsave(&screen_lock);
+    for (char *p = hex; *p; p++)
+        print_char_impl(*p);
+    spinlock_unlock_irqrestore(&screen_lock, flags);
 }
 
 void print_int(unsigned int num)
@@ -168,13 +197,21 @@ void print_int(unsigned int num)
     char buf[12];
     int i = 11;
     buf[11] = 0;
-    if (num == 0) { print_string("0"); return; }
+    if (num == 0) {
+        unsigned int flags = spinlock_lock_irqsave(&screen_lock);
+        print_char_impl('0');
+        spinlock_unlock_irqrestore(&screen_lock, flags);
+        return;
+    }
     while (num && i > 0) {
         i--;
         buf[i] = '0' + (num % 10);
         num /= 10;
     }
-    print_string(buf + i);
+    unsigned int flags = spinlock_lock_irqsave(&screen_lock);
+    for (char *p = buf + i; *p; p++)
+        print_char_impl(*p);
+    spinlock_unlock_irqrestore(&screen_lock, flags);
 }
 
 int get_cursor_x(void) { return cursor_x; }

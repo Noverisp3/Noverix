@@ -1,9 +1,12 @@
 #include "keyboard.h"
 #include "../cpu/ports.h"
 #include "../cpu/idt.h"
+#include "../sync/sync.h"
 
 #define KEYBOARD_DATA_PORT 0x60
 #define KEYBOARD_STATUS_PORT 0x64
+
+static spinlock_t kb_lock = SPINLOCK_INIT;
 
 #define BACKSPACE 0x0E
 #define ENTER 0x1C
@@ -51,8 +54,11 @@ static void keyboard_handler(registers_t *regs)
     if (!(status & 0x01)) return;
     scan_code = inb(KEYBOARD_DATA_PORT);
 
+    unsigned int flags = spinlock_lock_irqsave(&kb_lock);
+
     if (scan_code == EXTENDED_PREFIX) {
         extended = 1;
+        spinlock_unlock_irqrestore(&kb_lock, flags);
         return;
     }
     if (extended) {
@@ -71,6 +77,7 @@ static void keyboard_handler(registers_t *regs)
                 }
             }
         }
+        spinlock_unlock_irqrestore(&kb_lock, flags);
         return;
     }
     if (scan_code == LSHIFT_DOWN || scan_code == RSHIFT_DOWN)
@@ -93,14 +100,19 @@ static void keyboard_handler(registers_t *regs)
             }
         }
     }
+    spinlock_unlock_irqrestore(&kb_lock, flags);
 }
 
 char get_char(void)
 {
-    if (buffer_head == buffer_tail)
+    unsigned int flags = spinlock_lock_irqsave(&kb_lock);
+    if (buffer_head == buffer_tail) {
+        spinlock_unlock_irqrestore(&kb_lock, flags);
         return 0;
+    }
     char c = key_buffer[buffer_tail];
     buffer_tail = (buffer_tail + 1) % BUFFER_SIZE;
+    spinlock_unlock_irqrestore(&kb_lock, flags);
     return c;
 }
 

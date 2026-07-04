@@ -1,7 +1,10 @@
 #include "serial.h"
 #include "../cpu/ports.h"
+#include "../sync/sync.h"
 
 #define COM1 0x3F8
+
+static spinlock_t serial_lock = SPINLOCK_INIT;
 
 static int is_transmit_empty(void)
 {
@@ -19,7 +22,7 @@ void init_serial(void)
     outb(COM1 + 4, 0x0B);
 }
 
-void serial_write_char(char c)
+static void serial_write_char_impl(char c)
 {
     while (!is_transmit_empty());
     if (c == '\n')
@@ -27,10 +30,19 @@ void serial_write_char(char c)
     outb(COM1, c);
 }
 
+void serial_write_char(char c)
+{
+    unsigned int flags = spinlock_lock_irqsave(&serial_lock);
+    serial_write_char_impl(c);
+    spinlock_unlock_irqrestore(&serial_lock, flags);
+}
+
 void serial_write_string(const char *str)
 {
+    unsigned int flags = spinlock_lock_irqsave(&serial_lock);
     while (*str)
-        serial_write_char(*str++);
+        serial_write_char_impl(*str++);
+    spinlock_unlock_irqrestore(&serial_lock, flags);
 }
 
 void serial_write_hex(unsigned int num)
@@ -45,7 +57,10 @@ void serial_write_hex(unsigned int num)
         num >>= 4;
     }
     hex[10] = '\0';
-    serial_write_string(hex);
+    unsigned int flags = spinlock_lock_irqsave(&serial_lock);
+    for (char *p = hex; *p; p++)
+        serial_write_char_impl(*p);
+    spinlock_unlock_irqrestore(&serial_lock, flags);
 }
 
 void serial_write_int(unsigned int num)
@@ -53,9 +68,11 @@ void serial_write_int(unsigned int num)
     char buf[12];
     int i = 11;
     buf[11] = 0;
+    unsigned int flags = spinlock_lock_irqsave(&serial_lock);
     if (num == 0)
     {
-        serial_write_string("0");
+        serial_write_char_impl('0');
+        spinlock_unlock_irqrestore(&serial_lock, flags);
         return;
     }
     while (num && i > 0)
@@ -64,7 +81,9 @@ void serial_write_int(unsigned int num)
         buf[i] = '0' + (num % 10);
         num /= 10;
     }
-    serial_write_string(buf + i);
+    for (int j = i; buf[j]; j++)
+        serial_write_char_impl(buf[j]);
+    spinlock_unlock_irqrestore(&serial_lock, flags);
 }
 
 int serial_data_available(void)

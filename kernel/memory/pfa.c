@@ -1,10 +1,12 @@
 #include "pfa.h"
 #include "../drivers/serial.h"
+#include "../sync/sync.h"
 
 extern unsigned int bss_end;
 
 static unsigned char bitmap[MAX_FRAMES / 8];
 static unsigned int total_frames;
+static spinlock_t pfa_lock = SPINLOCK_INIT;
 
 #define FRAME(addr) ((unsigned int)(addr) / FRAME_SIZE)
 #define ADDR(frame) ((void *)((frame) * FRAME_SIZE))
@@ -52,33 +54,41 @@ void pfa_init(void)
 
 void *alloc_frame(void)
 {
+    unsigned int flags = spinlock_lock_irqsave(&pfa_lock);
     for (unsigned int i = 0; i < total_frames; i++) {
         if (!test_bit(i)) {
             set_bit(i);
+            spinlock_unlock_irqrestore(&pfa_lock, flags);
             return ADDR(i);
         }
     }
+    spinlock_unlock_irqrestore(&pfa_lock, flags);
     serial_write_string("[pfa] OOM\n");
     return 0;
 }
 
 void free_frame(void *addr)
 {
+    unsigned int flags = spinlock_lock_irqsave(&pfa_lock);
     unsigned int frame = FRAME(addr);
     if (frame < total_frames) clear_bit(frame);
+    spinlock_unlock_irqrestore(&pfa_lock, flags);
 }
 
 int get_free_frame_count(void)
 {
+    unsigned int flags = spinlock_lock_irqsave(&pfa_lock);
     int count = 0;
     for (unsigned int i = 0; i < total_frames; i++)
         if (!test_bit(i)) count++;
+    spinlock_unlock_irqrestore(&pfa_lock, flags);
     return count;
 }
 
 void *alloc_frames(unsigned int count)
 {
     if (count == 0 || count > total_frames) return 0;
+    unsigned int flags = spinlock_lock_irqsave(&pfa_lock);
     for (unsigned int start = 0; start <= total_frames - count; start++)
     {
         int ok = 1;
@@ -90,17 +100,21 @@ void *alloc_frames(unsigned int count)
         {
             for (unsigned int j = 0; j < count; j++)
                 set_bit(start + j);
+            spinlock_unlock_irqrestore(&pfa_lock, flags);
             return ADDR(start);
         }
     }
+    spinlock_unlock_irqrestore(&pfa_lock, flags);
     serial_write_string("[pfa] OOM for contiguous frames\n");
     return 0;
 }
 
 void free_frames(void *addr, unsigned int count)
 {
+    unsigned int flags = spinlock_lock_irqsave(&pfa_lock);
     unsigned int start = FRAME(addr);
     for (unsigned int j = 0; j < count; j++)
         if (start + j < total_frames)
             clear_bit(start + j);
+    spinlock_unlock_irqrestore(&pfa_lock, flags);
 }

@@ -1,6 +1,7 @@
 #include "paging.h"
 #include "pfa.h"
 #include "../drivers/serial.h"
+#include "../sync/sync.h"
 
 typedef unsigned int page_dir_entry_t;
 typedef unsigned int page_table_entry_t;
@@ -9,6 +10,7 @@ typedef unsigned int page_table_entry_t;
 #define PTE_IDX(virt) (((unsigned int)(virt) >> 12) & 0x3FF)
 
 static page_dir_entry_t *page_dir;
+static spinlock_t paging_lock = SPINLOCK_INIT;
 
 static page_table_entry_t *create_table(unsigned int virt, unsigned int flags)
 {
@@ -65,7 +67,7 @@ void init_paging(void)
     serial_write_string("[paging] enabled\n");
 }
 
-int map_page(unsigned int virt, unsigned int phys, unsigned int flags)
+int map_page_impl(unsigned int virt, unsigned int phys, unsigned int flags)
 {
     unsigned int pde_idx = PDE_IDX(virt);
 
@@ -81,7 +83,15 @@ int map_page(unsigned int virt, unsigned int phys, unsigned int flags)
     return 0;
 }
 
-int unmap_page(unsigned int virt)
+int map_page(unsigned int virt, unsigned int phys, unsigned int flags)
+{
+    unsigned int flags_save = spinlock_lock_irqsave(&paging_lock);
+    int r = map_page_impl(virt, phys, flags);
+    spinlock_unlock_irqrestore(&paging_lock, flags_save);
+    return r;
+}
+
+int unmap_page_impl(unsigned int virt)
 {
     unsigned int pde_idx = PDE_IDX(virt);
     if (!(page_dir[pde_idx] & PAGE_PRESENT))
@@ -97,19 +107,33 @@ int unmap_page(unsigned int virt)
     return 0;
 }
 
+int unmap_page(unsigned int virt)
+{
+    unsigned int flags = spinlock_lock_irqsave(&paging_lock);
+    int r = unmap_page_impl(virt);
+    spinlock_unlock_irqrestore(&paging_lock, flags);
+    return r;
+}
+
 int get_page_mapping(unsigned int virt, unsigned int *phys_out)
 {
+    unsigned int flags = spinlock_lock_irqsave(&paging_lock);
     unsigned int pde_idx = PDE_IDX(virt);
-    if (!(page_dir[pde_idx] & PAGE_PRESENT))
+    if (!(page_dir[pde_idx] & PAGE_PRESENT)) {
+        spinlock_unlock_irqrestore(&paging_lock, flags);
         return -1;
+    }
 
     page_table_entry_t *table = (page_table_entry_t *)(page_dir[pde_idx] & 0xFFFFF000);
     unsigned int pte_idx = PTE_IDX(virt);
-    if (!(table[pte_idx] & PAGE_PRESENT))
+    if (!(table[pte_idx] & PAGE_PRESENT)) {
+        spinlock_unlock_irqrestore(&paging_lock, flags);
         return -1;
+    }
 
     if (phys_out)
         *phys_out = table[pte_idx] & 0xFFFFF000;
+    spinlock_unlock_irqrestore(&paging_lock, flags);
     return 0;
 }
 
@@ -129,6 +153,7 @@ unsigned int read_cr0(void)
 
 void dump_page_info(void)
 {
+    unsigned int flags = spinlock_lock_irqsave(&paging_lock);
     unsigned int pd_phys = read_cr3();
     serial_write_string("[pages] Page Dir at ");
     serial_write_hex(pd_phys);
@@ -167,4 +192,5 @@ void dump_page_info(void)
     serial_write_string(" PTEs (");
     serial_write_int(total_ptes * 4);
     serial_write_string(" KB mapped)\n");
+    spinlock_unlock_irqrestore(&paging_lock, flags);
 }
