@@ -11,6 +11,7 @@ typedef enum {
 } cpu_state_t;
 
 typedef struct {
+    int cpu_id;
     unsigned int apic_id;
     cpu_state_t state;
     void *stack_top;
@@ -18,5 +19,13 @@ typedef struct {
 
 extern int cpu_count;
 extern cpu_info_t cpu_info[MAX_CPU];
+
+/* Returns current CPU ID via %gs segment */
+static inline int get_cpu_id(void)
+{
+    int id;
+    __asm__ ("movl %%gs:0, %0" : "=r" (id));
+    return id;
+}
 
 #endif

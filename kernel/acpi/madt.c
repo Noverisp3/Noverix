@@ -111,8 +111,9 @@ int acpi_parse_madt(void)
             const madt_processor_t *proc = (const madt_processor_t *)p;
             if (proc->flags & 1) {
                 if (cpu_count < MAX_CPU) {
-                    cpu_info[cpu_count].apic_id = proc->apic_id;
-                    cpu_info[cpu_count].state = CPU_UNINITIALIZED;
+                    cpu_info[cpu_count].cpu_id    = cpu_count;
+                    cpu_info[cpu_count].apic_id   = proc->apic_id;
+                    cpu_info[cpu_count].state     = CPU_UNINITIALIZED;
                     cpu_info[cpu_count].stack_top = 0;
                     cpu_count++;
                 }
