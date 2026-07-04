@@ -114,6 +114,14 @@ irq_common:
     pushl %esp
     call irq_handler
     addl $4, %esp
+    /* Context switch: pass current ESP to task_switch_tick */
+    pushl %esp
+    call task_switch_tick
+    addl $4, %esp
+    test %eax, %eax
+    jz .Lno_switch_irq
+    mov %eax, %esp
+.Lno_switch_irq:
     popl %gs
     popl %fs
     popl %es

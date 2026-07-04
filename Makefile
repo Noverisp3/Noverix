@@ -36,7 +36,8 @@ KERNEL_OBJS = \
 	$(BUILD_DIR)/ap_startup.o \
 	$(BUILD_DIR)/ap_trampoline.o \
 	$(BUILD_DIR)/scheduler.o \
-	$(BUILD_DIR)/tlb.o
+	$(BUILD_DIR)/tlb.o \
+	$(BUILD_DIR)/task.o
 
 .PHONY: all clean run run-qemu iso
 

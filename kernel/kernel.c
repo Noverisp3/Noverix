@@ -22,6 +22,7 @@
 #include "ap_startup.h"
 #include "scheduler/scheduler.h"
 #include "sync/tlb.h"
+#include "task.h"
 
 #define VBE_INFO_ADDR ((volatile unsigned int *)0x1000)
 
@@ -186,6 +187,8 @@ static void sum_worker(void *arg)
     w->result->sum = s;
     w->result->cpu_id = get_cpu_id();
 }
+
+static void shell_main(void);
 
 static void execute_cmd(const char *cmd, char *arg)
 {
@@ -865,6 +868,15 @@ void kernel_main(void)
 
     debug_log("kernel_main started");
 
+    task_init();
+    current_task = task_create(shell_main);
+
+    shell_main();
+    while (1);
+}
+
+static void shell_main(void)
+{
     clear_screen();
     print_string("Noverix v0.1\n");
     print_string("============\n");

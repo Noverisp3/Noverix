@@ -9,10 +9,13 @@
 static volatile unsigned int tick_count;
 static unsigned int tick_ms;
 
+volatile int task_switch_pending;
+
 static void timer_handler(registers_t *regs)
 {
     (void)regs;
     tick_count++;
+    task_switch_pending = 1;
 }
 
 void init_timer(unsigned int freq)
