@@ -48,8 +48,8 @@ task_t *task_create(void (*entry)(void))
     *--sp = 0; *--sp = 0; *--sp = 0; *--sp = 0;
     *--sp = 0; *--sp = 0; *--sp = 0; *--sp = 0;
 
-    /* segments: DS, ES, FS, GS */
-    *--sp = 0x10; *--sp = 0x10; *--sp = 0x10; *--sp = 0x10;
+    /* segments: DS, ES, FS, GS (GS = GDT_PERCPU for per-CPU data) */
+    *--sp = 0x10; *--sp = 0x10; *--sp = 0x10; *--sp = 0x30;
 
     t->kernel_esp = (unsigned int)sp;
 
