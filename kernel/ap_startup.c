@@ -56,6 +56,18 @@ void ap_main(unsigned int apic_id)
 
     /* Set up per-CPU GDT/TSS/%gs */
     gdt_init_percpu(cpu_id);
+    {
+        unsigned int gs_sel;
+        int dbg_cpu = get_cpu_id();
+        __asm__ ("mov %%gs, %0" : "=r" (gs_sel));
+        serial_write_string("[ap] GS=0x");
+        serial_write_hex(gs_sel);
+        serial_write_string(" get_cpu_id()=");
+        serial_write_int(dbg_cpu);
+        serial_write_string(" (expected ");
+        serial_write_int(cpu_id);
+        serial_write_string(")\n");
+    }
     gdt_set_kernel_stack(cpu_id, stack_top);
 
     /* Create idle task so this AP can participate in SMP scheduling */

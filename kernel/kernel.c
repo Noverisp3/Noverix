@@ -185,7 +185,17 @@ static void sum_worker(void *arg)
     for (int i = 0; i < w->count; i++)
         s += w->start + i;
     w->result->sum = s;
-    w->result->cpu_id = get_cpu_id();
+    {
+        unsigned int gs2;
+        __asm__ ("mov %%gs, %0" : "=r" (gs2));
+        serial_write_string("[worker] GS=0x");
+        serial_write_hex(gs2);
+        serial_write_string(" cpu_id=");
+        int cid = get_cpu_id();
+        serial_write_int(cid);
+        serial_write_char('\n');
+        w->result->cpu_id = cid;
+    }
 }
 
 static void shell_main(void);
