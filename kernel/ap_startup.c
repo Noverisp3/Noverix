@@ -56,28 +56,6 @@ void ap_main(unsigned int apic_id)
 
     /* Set up per-CPU GDT/TSS/%gs */
     gdt_init_percpu(cpu_id);
-    {
-        unsigned int gs_sel;
-        int dbg_cpu = get_cpu_id();
-        __asm__ ("mov %%gs, %0" : "=r" (gs_sel));
-        serial_write_string("[ap] GS=0x0x");
-        serial_write_hex(gs_sel);
-        serial_write_string(" get_cpu_id()=");
-        serial_write_int(dbg_cpu);
-        serial_write_string(" (expected ");
-        serial_write_int(cpu_id);
-        serial_write_string(")\n");
-        /* Dump GDT entry 6 from per-CPU GDT */
-        gdt_entry_t *gdt6 = &per_cpu_gdt[cpu_id][6];
-        unsigned int b = (unsigned int)gdt6->base_low | ((unsigned int)gdt6->base_middle << 16) | ((unsigned int)gdt6->base_high << 24);
-        serial_write_string("[ap] GDT[6] base=0x");
-        serial_write_hex(b);
-        serial_write_string(" limit_low=0x");
-        serial_write_hex(gdt6->limit_low);
-        serial_write_string(" access=0x");
-        serial_write_hex(gdt6->access);
-        serial_write_string("\n");
-    }
     gdt_set_kernel_stack(cpu_id, stack_top);
 
     /* Create idle task so this AP can participate in SMP scheduling */

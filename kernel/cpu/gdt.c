@@ -31,7 +31,7 @@ static gdt_entry_t boot_gdt[5];
 static gdt_ptr_t boot_gdt_ptr;
 
 /* Per-CPU GDTs and TSSs */
-gdt_entry_t per_cpu_gdt[MAX_CPU][GDT_ENTRIES];    /* non-static for debugging */
+static gdt_entry_t per_cpu_gdt[MAX_CPU][GDT_ENTRIES];
 static gdt_ptr_t per_cpu_gdt_ptr[MAX_CPU];
 static tss_t per_cpu_tss[MAX_CPU];
 
