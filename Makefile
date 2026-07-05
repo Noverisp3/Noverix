@@ -7,6 +7,8 @@ LDFLAGS=-m elf_i386 -T linker.ld -Map kernel.map
 
 BUILD_DIR=build
 
+STAGE2_SECTORS=16
+
 SOURCE_DIRS=kernel kernel/drivers kernel/cpu kernel/memory kernel/acpi kernel/apic kernel/scheduler kernel/sync
 vpath %.c $(SOURCE_DIRS)
 vpath %.S $(SOURCE_DIRS)
@@ -67,12 +69,17 @@ $(BUILD_DIR)/kernel.elf: $(KERNEL_OBJS) | $(BUILD_DIR)
 $(BUILD_DIR)/kernel.bin: $(BUILD_DIR)/kernel.elf | $(BUILD_DIR)
 	$(OBJCOPY) -O binary $< $@
 
-$(BUILD_DIR)/bootloader.bin: boot/bootloader.asm $(BUILD_DIR)/kernel.bin | $(BUILD_DIR)
-	kernel_size=$$(stat -c%s $(BUILD_DIR)/kernel.bin); \
-	sectors=$$(( (kernel_size + 511) / 512 )); \
-	$(ASM) -f bin boot/bootloader.asm -dKERNEL_SECTORS=$$sectors -o $@
+$(BUILD_DIR)/bootloader.bin: boot/bootloader.asm | $(BUILD_DIR)
+	$(ASM) -f bin $< -dSTAGE2_SECTORS=$(STAGE2_SECTORS) -o $@
 
-$(BUILD_DIR)/os-image.bin: $(BUILD_DIR)/bootloader.bin $(BUILD_DIR)/kernel.bin | $(BUILD_DIR)
+$(BUILD_DIR)/boot_stage2.bin: boot/boot_stage2.asm $(BUILD_DIR)/kernel.bin | $(BUILD_DIR)
+	kernel_size=$$(stat -c%s $(BUILD_DIR)/kernel.bin); \
+	kernel_sectors=$$(( (kernel_size + 511) / 512 )); \
+	kernel_lba=$$((1 + $(STAGE2_SECTORS))); \
+	$(ASM) -f bin $< -dKERNEL_SECTORS=$$kernel_sectors -dKERNEL_LBA=$$kernel_lba -o $@
+	truncate -s $$(( $(STAGE2_SECTORS) * 512 )) $@
+
+$(BUILD_DIR)/os-image.bin: $(BUILD_DIR)/bootloader.bin $(BUILD_DIR)/boot_stage2.bin $(BUILD_DIR)/kernel.bin | $(BUILD_DIR)
 	cat $^ > $@
 	truncate -s 1474560 $@
 
@@ -88,27 +95,31 @@ rootfs/triangle.elf: tests/triangle.c tests/noverix.h tests/app.ld | $(BUILD_DIR
 	$(LD) -m elf_i386 -no-pie -T tests/app.ld $(BUILD_DIR)/triangle.o -o $@
 
 $(BUILD_DIR)/os-image.iso: $(BUILD_DIR)/os-image.bin
-	xorriso -as mkisofs -b os-image.bin -no-emul-boot -boot-load-size 4 \
+	xorriso -as mkisofs -b os-image.bin -no-emul-boot -boot-load-size 18 \
 	  -o $@ $(BUILD_DIR)
 
 noverix.img: $(BUILD_DIR)/os-image.bin nvfs_disk.img
 	cp $(BUILD_DIR)/os-image.bin $@
 	cat nvfs_disk.img >> $@
 	@echo "Created $@ — dd to USB: sudo dd if=$@ of=/dev/sdX bs=512"
-	@echo "NOTE: For VMware, use 'make run-qemu-iso' (ISO + NVFS disk) instead of noverix.img"
 
 run-qemu: $(BUILD_DIR)/os-image.bin nvfs_disk.img
-	qemu-system-x86_64 -vga std -boot order=a -drive format=raw,file=$<,if=floppy -drive file=nvfs_disk.img,format=raw,if=none,id=ata0 -device ide-hd,drive=ata0 -m 128 -smp 2 -serial mon:stdio
+	qemu-system-x86_64 -vga std -boot order=c \
+	  -drive format=raw,file=$<,if=none,id=boot \
+	  -device ide-hd,drive=boot,bus=ide.0,unit=0 \
+	  -drive file=nvfs_disk.img,format=raw,if=none,id=nvfs \
+	  -device ide-hd,drive=nvfs,bus=ide.0,unit=1 \
+	  -m 128 -smp 2 -serial mon:stdio
 
 run-qemu-iso: $(BUILD_DIR)/os-image.iso nvfs_disk.img
 	qemu-system-x86_64 -vga std -boot order=d -cdrom $(BUILD_DIR)/os-image.iso \
-	  -drive file=nvfs_disk.img,format=raw,if=none,id=ata0 \
-	  -device ide-hd,drive=ata0 -smp 2 -m 128
+	  -drive file=nvfs_disk.img,format=raw,if=none,id=nvfs \
+	  -device ide-hd,drive=nvfs -smp 2 -m 128
 
 run-qemu-nrx: noverix.img
 	qemu-system-x86_64 -vga std -smp 2 -boot order=c \
-	  -drive file=noverix.img,format=raw,if=none,id=ata0 \
-	  -device ide-hd,drive=ata0 -m 128 -serial mon:stdio
+	  -drive file=noverix.img,format=raw,if=none,id=boot \
+	  -device ide-hd,drive=boot -m 128 -serial mon:stdio
 
 run: $(BUILD_DIR)/os-image.bin
 	bochs -q -f bochsrc.bxrc

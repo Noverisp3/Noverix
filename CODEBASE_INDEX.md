@@ -6,11 +6,13 @@
 
 ```
 BIOS
- └─ boot/bootloader.asm (real-mode INT 0x13 load kernel → 0x9000)
-    ├─ VBE init: INT 0x10 mode 0x118, info at 0x1000
-    └─ PM trampoline (forward copy 0x9000 → 0x2000)
-       └─ kernel/entry.S (BSS zeroing)
-          └─ kernel/kernel.c::kernel_main (C entry)
+ └─ boot/bootloader.asm (Stage 1 MBR @ 0x7C00: load Stage 2 from LBA 1-16)
+    └─ boot/boot_stage2.asm (Stage 2 @ 0x7E00: E801, VBE, A20, GDT, kernel load)
+       ├─ INT 0x13 LBA read kernel from disk → 0x9000
+       ├─ VBE init: INT 0x10 mode 0x115, info at 0x1000
+       └─ PM trampoline (forward copy 0x9000 → 0x2000)
+          └─ kernel/entry.S (BSS zeroing)
+             └─ kernel/kernel.c::kernel_main (C entry)
              ├─ kernel/cpu/gdt.c       → GDT reload
              ├─ kernel/cpu/idt.c       → IDT + PIC remap + exceptions
              ├─ kernel/drivers/screen.c → VGA text / VBE graphics dispatch
@@ -43,7 +45,8 @@ BIOS
 ```
 Project_002_OS/
 ├── boot/
-│   ├── bootloader.asm        # MBR: real-mode → A20 → GDT → PM trampoline
+│   ├── bootloader.asm        # Stage 1 MBR: loads Stage 2 from LBA 1-16, 512B, w/ partition table
+│   ├── boot_stage2.asm       # Stage 2: E801, VBE, A20, GDT, PM trampoline, kernel load (up to 8KB)
 │   └── ap_trampoline.asm     # AP startup trampoline (16-bit→PM→paging→ap_main)
 ├── kernel/
 │   ├── entry.S               # Entry: BSS zero → jmp kernel_main
@@ -109,17 +112,36 @@ Project_002_OS/
 
 ### `boot/bootloader.asm`
 
-- **Role:** MBR bootloader (512 bytes, loaded at 0x7C00). Real-mode → protected mode transition.
-- **Functions/Macros:**
-  - `print_string`: INT 0x10 teletype | [BIOS]
-  - `disk_load`: INT 0x13 loads kernel from floppy/HDD to 0x9000 | [BIOS]
-  - `enable_a20`: port 0x92 + keyboard controller 0x64/0x60 + INT 0x15 | [I/O ports]
-  - `switch_to_pm`: GDT load → A20 → CR0 bit 0 → far jump 0x0500 | [gdt descriptor inline]
-  - `pm_trampoline` (32-bit): reload segments, ESP=0x90000, forward rep movsd 0x9000→0x2000, call 0x2000 | []
-- **Import:** Constants `KERNEL_OFFSET=0x2000`, `KERNEL_LOAD_ADDR=0x9000`, `PM_TRAMPOLINE_ADDR=0x0500`
-- **VBE init:** After kernel load, calls INT 0x10 AX=0x4F01/CX=0x0118 (get mode info) then AX=0x4F02/BX=0x4118 (set mode 0x118 with LFB). Mode info buffer at `0x0000:0x0600` to avoid overwriting kernel load area. LFB/width/height/pitch/bpp stored at `0x1000` for kernel consumption.
-- **Notes:** Forward copy (`cld` `rep movsd`) is safe because dest (0x2000) < src (0x9000) — source is always read before dest overwrites, even when overlapping (kernel >56 sectors). Replaces the old backward copy (`std`) which corrupted the source when dest overlapped source.
-- **HDD boot:** Uses LBA (`int 0x13, ah=0x42`) reading 1 sector at a time in a loop with segment-crossing support. DAP count of 1 avoids SeaBIOS limit of ~127 sectors per call. Falls back to CHS (`int 0x13, ah=0x02`) if extended read unsupported.
+- **Role:** Stage 1 MBR (512 bytes at 0x7C00). Minimal — only loads Stage 2 from LBA 1-16 via LBA (CHS fallback), then jumps to 0x7E00. Includes MBR partition table at offset 446 for VMware/HW BIOS compatibility.
+- **Functions:**
+  - `start`: Save boot drive, set segments/stack, read Stage 2 via INT 0x13 AH=0x42 (LBA) or AH=0x02 (CHS), far jump to 0x0000:0x7E00 | []
+  - `disk_error`: Infinite loop on I/O failure | []
+- **Constants:** `STAGE2_SECTORS=16`, `STAGE2_ADDR=0x7E00`, `BOOTDRIVE_ADDR=0x7BFF`
+- **Data:** DAP (Disk Address Packet) for LBA read, boot_drive byte
+- **Partition table:** 64 bytes at offset 446 — single entry type 0x83 (Linux), LBA start=1, size=max
+- **Notes:** No longer handles VBE, E801, A20, GDT, or PM transition — all moved to Stage 2 (boot_stage2.asm). Boot drive passed to Stage 2 via fixed memory address 0x7BFF. The entire Stage 1 fits in < 446 bytes, leaving room for the partition table.
+
+---
+
+### `boot/boot_stage2.asm`
+
+- **Role:** Stage 2 bootloader (loaded at 0x7E00 by Stage 1). Handles all complex boot logic with no 512B limit — kernel disk load, VBE init, E801 memory detection, A20 gate, GDT setup, PM trampoline copy, and transition to 32-bit protected mode.
+- **Functions:**
+  - `start`: Save boot drive (from 0x7BFF), print banner, read kernel sectors from disk (LBA 17+, LBA with 1-sector loop + segment crossing, CHS fallback) | [print_string, INT 0x13]
+  - `print_string`: INT 0x10 teletype output | [BIOS]
+  - `disk_error`: Print "Disk!" message and halt | [print_string]
+  - `enable_a20`: Port 0x92 + INT 0x15 AX=0x2401 | [I/O ports]
+  - `switch_to_pm`: LGDT → enable_a20 → CR0.PE → far jump to PM_TRAMPOLINE_ADDR | [enable_a20]
+  - `pm_trampoline` (32-bit): Reload segment regs with DATA_SEG, ESP=0x90000, forward `rep movsd` 0x9000→0x2000, call 0x2000 | []
+- **Constants:** `KERNEL_LBA` (1 + STAGE2_SECTORS = 17), `KERNEL_SECTORS` (from kernel.bin size), `KERNEL_LOAD_ADDR=0x9000`, `KERNEL_OFFSET=0x2000`, `BOOTDRIVE_ADDR=0x7BFF`
+- **Data:** DAP, boot_drive, message strings ("Noverix Stage 2", "Kernel loaded", "Disk!")
+- **Boot flow:**
+  1. Print "Noverix Stage 2" banner → read kernel from disk to 0x9000 → print "Kernel loaded"
+  2. VBE init: INT 0x10 mode 0x115 (800×600×24bpp LFB), mode info at 0x1000
+  3. E801 memory detection: INT 0x15 AX=0xE801, store total RAM at 0x100C
+  4. Copy PM trampoline to 0x0500, LGDT, enable A20, CR0.PE
+  5. Far jump to PM trampoline at 0x0500
+- **Notes:** Forward copy (`cld` `rep movsd`) is safe because dest (0x2000) < src (0x9000). LBA reads 1 sector at a time to avoid SeaBIOS limits (~127 sectors). No 512B constraint — allows verbose debug output and easy maintenance.
 
 ---
 
@@ -466,7 +488,6 @@ Project_002_OS/
   - Inode table (sectors 10-41): initial 128 inodes × 128 bytes = 32 sectors, expandable
   - Data blocks (sectors 42-32767): 32726 blocks × 512 bytes = ~16MB
 - **Internal functions (static):**
-  - `find_drive(void)`: Find first ATA device | [ata_drive_exists]
   - `read_sector(lba, buf)` / `write_sector(lba, buf)`: Single sector I/O | [ata_read_sectors, ata_write_sectors]
   - `read_block(block, buf)` / `write_block(block, buf)`: Map block → LBA (data_start + block) | [read_sector, write_sector]
   - `bitmap_test(block)`, `bitmap_set(block, used)`, `bitmap_find(count)`: Block bitmap management | [read_sector, write_sector]
@@ -493,7 +514,7 @@ Project_002_OS/
   - `find_parent(inum)`: Scan all inodes to find parent directory | [inode_read, read_block, extent_load_all]
 
 - **Public API:**
-  - `nvfs_mount(void)`: Read superblock → set sb_* fields → set nvfs_cwd = root | [find_drive, read_sector]
+  - `nvfs_mount(void)`: Iterate all 4 ATA positions (ch 0-1, dr 0-1) at offsets 0 and 2880 → read superblock → set sb_* fields on first "NVFS" signature found | [ata_drive_exists, read_sector]
   - `nvfs_list(path)`: List directory — `[DIR]` tag, decimal size | [resolve_path, inode_read, read_block, extent_load_all]
   - `nvfs_read(path, buf, max)`: Read file | [resolve_path, dir_find, inode_read, extent_read]
   - `nvfs_write(path, data, size)`: Write/overwrite file with shadow paging (alloc new → persist inode → free old) | [resolve_path, dir_find, inode_alloc, extent_write, dir_add, inode_write]

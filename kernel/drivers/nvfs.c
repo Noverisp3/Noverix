@@ -20,14 +20,6 @@ static unsigned nvfs_offset;
 
 #define EXTENT_CACHE_MAX (NVFS_DIRECT_EXTENTS + NVFS_INDIRECT_ENTS)
 
-static int find_drive(void)
-{
-    for (int ch = 0; ch < 2; ch++)
-        for (int dr = 0; dr < 2; dr++)
-            if (ata_drive_exists(ch, dr)) { nvfs_ch = ch; nvfs_dr = dr; return 0; }
-    return -1;
-}
-
 static int read_sector(unsigned lba, unsigned char *buf)
 {
     return ata_read_sectors(nvfs_ch, nvfs_dr, lba, 1, buf);
@@ -714,26 +706,31 @@ static int resolve_path(const char *path, unsigned *parent_inode, char *name)
 /* ------------------------------------------------------------------ */
 int nvfs_mount(void)
 {
-    if (find_drive() != 0) { nvfs_errno = NVFS_ERR_IO; return -1; }
-
     unsigned char buf[NVFS_SECTOR_SIZE];
     unsigned offsets[] = {0, 2880};
 
-    for (unsigned i = 0; i < 2; i++) {
-        nvfs_offset = offsets[i];
-        if (read_sector(nvfs_offset + 1, buf) != 0) continue;
-        if (buf[0] == 'N' && buf[1] == 'V' && buf[2] == 'F' && buf[3] == 'S') {
-            sb_bitmap_start = *(unsigned int *)(buf + 16);
-            sb_bitmap_sectors = *(unsigned int *)(buf + 20);
-            sb_inode_start = *(unsigned int *)(buf + 24);
-            sb_inode_count = *(unsigned int *)(buf + 28);
-            sb_data_start = *(unsigned int *)(buf + 32);
-            sb_inode_blocks = *(unsigned int *)(buf + 36);
-            if (sb_inode_blocks == 0)
-                sb_inode_blocks = sb_inode_count / (NVFS_SECTOR_SIZE / NVFS_INODE_SIZE);
-            nvfs_cwd = NVFS_ROOT_INODE;
-            mounted = 1;
-            return 0;
+    for (int ch = 0; ch < 2; ch++) {
+        for (int dr = 0; dr < 2; dr++) {
+            if (!ata_drive_exists(ch, dr)) continue;
+            for (unsigned i = 0; i < 2; i++) {
+                nvfs_ch = ch;
+                nvfs_dr = dr;
+                nvfs_offset = offsets[i];
+                if (read_sector(nvfs_offset + 1, buf) != 0) continue;
+                if (buf[0] == 'N' && buf[1] == 'V' && buf[2] == 'F' && buf[3] == 'S') {
+                    sb_bitmap_start = *(unsigned int *)(buf + 16);
+                    sb_bitmap_sectors = *(unsigned int *)(buf + 20);
+                    sb_inode_start = *(unsigned int *)(buf + 24);
+                    sb_inode_count = *(unsigned int *)(buf + 28);
+                    sb_data_start = *(unsigned int *)(buf + 32);
+                    sb_inode_blocks = *(unsigned int *)(buf + 36);
+                    if (sb_inode_blocks == 0)
+                        sb_inode_blocks = sb_inode_count / (NVFS_SECTOR_SIZE / NVFS_INODE_SIZE);
+                    nvfs_cwd = NVFS_ROOT_INODE;
+                    mounted = 1;
+                    return 0;
+                }
+            }
         }
     }
     return -1;

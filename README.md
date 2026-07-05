@@ -6,7 +6,7 @@ A minimal x86 hobby operating system built from scratch. Boots from real mode in
 
 | Area | Details |
 |------|---------|
-| **Boot** | Real-mode → protected-mode transition, A20 gate enable, GDT loading, forward `rep movsd` safe kernel copy. |
+| **Boot** | Multi-stage bootloader: Stage 1 MBR (512B) loads Stage 2 from LBA 1-16 via LBA/CHS → Stage 2 (8KB, loaded at 0x7E00) handles E801 memory detect, VBE init, A20 gate, GDT, and 32-bit PM transition. Forward `rep movsd` safe kernel copy. MBR includes valid partition table (type 0x83) for VMware/HW BIOS compatibility. |
 | **Disk I/O** | ATA PIO (LBA28) read/write, dual-channel primary/secondary, IDENTIFY-based drive detection, sector-level access. |
 | **NVFS** | Extent-based filesystem: superblock (sector 1), block bitmap (sectors 2–9), inode table (sectors 10–41, expandable), data blocks (sectors 42–32767). Each inode has 13 direct extents + 1 indirect block pointer (linked extents, up to 64 more extents). Shadow paging for crash-safe writes. Dynamic inode table expansion when full. File timestamps (ctime/mtime, seconds since boot) stored in inode. |
 | **VGA text mode** | 80×25 text buffer, hardware cursor, terminal scrolling, hex/dec rendering. Fallback when VBE unavailable. |
@@ -64,7 +64,7 @@ Produces `build/os-image.bin` — a 1.44 MB floppy image and `nvfs_disk.img` —
 | --- | --- |
 | `make` / `make all` | Build `os-image.bin` + `nvfs_disk.img` |
 | `make clean` | Remove `build/`, images |
-| `make run-qemu` | Floppy + NVFS disk (QEMU, `-vga std -smp 2 -serial mon:stdio`) |
+| `make run-qemu` | IDE HDD + NVFS slave disk (QEMU, `-vga std -smp 2 -serial mon:stdio`) |
 | `make run-qemu-nrx` | Single-disk HDD boot with NVFS (`-vga std -smp 2 -serial mon:stdio`) |
 | `make iso` | Build `build/os-image.iso` |
 | `make noverix.img` | Combined disk: `dd` to USB for real boot |
@@ -78,19 +78,21 @@ make run-qemu-nrx       # single disk HDD boot
 
 Or directly:
 
-**Floppy + NVFS disk:**
+**IDE HDD boot (primary master) + NVFS slave:**
 ```sh
-qemu-system-x86_64 -boot order=a \
-  -drive format=raw,file=build/os-image.bin,if=floppy \
-  -drive file=nvfs_disk.img,format=raw,if=none,id=ata0 \
-  -device ide-hd,drive=ata0 -m 32 -smp 2 -serial mon:stdio
+qemu-system-x86_64 -boot order=c \
+  -drive format=raw,file=build/os-image.bin,if=none,id=boot \
+  -device ide-hd,drive=boot,bus=ide.0,unit=0 \
+  -drive file=nvfs_disk.img,format=raw,if=none,id=nvfs \
+  -device ide-hd,drive=nvfs,bus=ide.0,unit=1 \
+  -m 128 -smp 2 -serial mon:stdio
 ```
 
 **Single-disk HDD (combined):**
 ```sh
 qemu-system-x86_64 -boot order=c \
-  -drive file=noverix.img,format=raw,if=none,id=ata0 \
-  -device ide-hd,drive=ata0 -m 32 -smp 2 -serial mon:stdio
+  -drive file=noverix.img,format=raw,if=none,id=boot \
+  -device ide-hd,drive=boot -m 128 -smp 2 -serial mon:stdio
 ```
 
 **Real hardware (USB):**
@@ -164,7 +166,8 @@ shutdown Power off
 ```
 .
 ├── boot/
-│   ├── bootloader.asm          # MBR bootloader (real-mode → PMode trampoline)
+│   ├── bootloader.asm          # Stage 1 MBR: loads Stage 2 from disk, 512B, w/ partition table
+│   ├── boot_stage2.asm         # Stage 2: E801, VBE, A20, GDT, PM trampoline, kernel load
 │   └── ap_trampoline.asm       # AP startup trampoline (16-bit→PM→paging→ap_main)
 ├── kernel/
 │   ├── entry.S                 # Kernel entry (_start), BSS zeroing
@@ -225,12 +228,14 @@ shutdown Power off
 
 | Address | Size | Contents |
 | --- | --- | --- |
-| `0x0500` | ~256 B | PM trampoline (32-bit) |
+| `0x0500` | ~256 B | PM trampoline (32-bit, copied from Stage 2) |
 | `0x0600` | 256 B | VBE mode info buffer (during boot) |
 | `0x1000` | 11 B | VBE info: LFB (4B) + width (2B) + height (2B) + pitch (2B) + bpp (1B) |
+| `0x100C` | 4 B | Total RAM in bytes (from E801, set by Stage 2) |
 | `0x2000` | variable | Kernel destination (executed from here) |
 | `0x70000` | ~1 KB | AP trampoline: 16-bit → PM → paging → ap_main (data at 0x70200) |
-| `0x7C00` | 512 B | Bootloader MBR and 16-bit stack |
+| `0x7C00` | 512 B | Stage 1 MBR (bootloader) |
+| `0x7E00` | up to 8KB | Stage 2 bootloader (loaded by Stage 1 from LBA 1-16) |
 | `0x90000` | variable | 32-bit stack (grows downward) |
 | `0xA0000` | 384 KB | Legacy/BIOS/VGA (reserved) |
 | `0xB8000` | 4 KB | VGA text framebuffer (80×25 × 2 bytes, unused in VBE mode) |
@@ -242,14 +247,24 @@ shutdown Power off
 ## Boot process
 
 ```
-BIOS → 0x7C00 (bootloader MBR)
-  ├── Real-mode setup, INT 0x13 loads kernel sectors to 0x9000
+BIOS → 0x7C00 (Stage 1 MBR, 512B)
+  ├── Save boot drive, set up segments
+  ├── Read Stage 2 from LBA 1-16 via LBA (CHS fallback)
+  └── Jump to 0x7E00
+
+Stage 2 (0x7E00, up to 8KB)
+  ├── Save boot drive from Stage 1 (via 0x7BFF)
+  ├── Print "Noverix Stage 2" banner
+  ├── INT 0x13: loads kernel sectors to 0x9000 (LBA 17+, LBA or CHS)
+  ├── Print "Kernel loaded"
+  ├── VBE init: INT 0x10 mode 0x115 (800×600×24bpp LFB), info at 0x1000
+  ├── E801 extended memory detection, store at 0x100C
+  ├── Copy PM trampoline to 0x0500
   ├── A20 gate enable (port 0x92)
-  ├── VBE init: INT 0x10 mode 0x118 (1024×768×24bpp LFB), info stored at 0x1000
   ├── GDT load, CR0 bit 0 set
   └── Far jump to PM trampoline at 0x0500
 
-PM Trampoline (32-bit)
+PM Trampoline (32-bit, at 0x0500)
   ├── Reload segment registers with DATA_SEG (0x10)
   ├── Set ESP = 0x90000
   ├── Forward rep movsd: copy kernel 0x9000 → 0x2000
@@ -280,7 +295,7 @@ _start → kernel_main
 - **BSS zeroing** in entry.S prevents crashes when static variables extend past loaded sectors.
 - **Paging** uses identity mapping (virt = phys) for first 32MB. Page directory at dynamically allocated physical frame. `map_page()` supports custom non-identity mappings.
 - **Heap** at 0x800000–0xA00000 (2MB, identity mapped). Boundary tag allocator: each block has a 4-byte header (size + LSB alloc flag) and 4-byte footer for O(1) backward merge. Minimum allocation 12 bytes.
-- **ATA on secondary channel** — QEMU's `-device ide-hd` attaches to channel 1. NVFS driver probes all channels.
+- **ATA drive detection** — NVFS driver probes all 4 ATA positions (ch 0-1, dr 0-1) at each offset (0 and 2880), mounts the first NVFS signature found. Works with any drive order.
 - **NVFS extent-based design** — each inode holds 13 direct extents + 1 indirect block pointer (linked extents: up to 64 more extents stored in an indirect sector). Files are read/written in a single sequential pass per extent — no cluster chain walking. Simpler and faster than FAT.
 - **Shadow paging** — writes use the pattern: alloc new blocks → write data → persist inode → free old blocks. If power fails mid-write, old data remains intact. No journaling overhead.
 - **Dynamic inode table** — when the 128 inodes are exhausted, the driver allocates a new block from the bitmap, expands the inode table, and updates the superblock. No more fixed inode limit.
@@ -293,4 +308,4 @@ _start → kernel_main
 - **IRQ routing on SMP** — QEMU routes ISA interrupts through PIC → LAPIC LINT0 (virtual wire mode), not through I/O APIC redirection entries. LINT0 must be ExtINT mode and PIC must stay unmasked for PIT/keyboard to work. All other I/O APIC redirections are masked.
 - **SMP scheduler** — pull-based work queue (not preemptive). BSP submits tasks via `scheduler_submit()`, idle CPUs pick them via `scheduler_step()`. AP idle loop uses `pause` (not `hlt`) because I/O APIC only delivers IRQ0/IRQ1 to CPU 0.
 - **Ring-3 user mode** — ELF loader creates ring-3 tasks via IRET with correct segment selectors. Kernel API (screen, keyboard, heap, NVFS, graphics) exposed via function pointer table. User-safe API wrappers use **no locks** — at CPL=3, IF=1 means a timer ISR can preempt while a lock is held, leading to deadlock when another task tries the same lock via `spinlock_lock_irqsave` (CLI + spin). Instead, per-pixel framebuffer writes and cursor_x/y access are lock-free (best-effort accuracy acceptable). Keyboard ISR uses `spinlock_try_lock` to avoid deadlock with user-held `kb_lock`. VBE framebuffer mapped with `PAGE_USER`. Timer-driven preemptive round-robin scheduler switches between shell (PID 1) and user tasks (PID 2+). Per-process page directories isolate each user task's address space (0x800000–0xA00000).
-- **Bootloader HDD boot** — reads 1 sector at a time via LBA (`int 0x13, ah=0x42`) to avoid SeaBIOS limits on DAP sector count (>127). Falls back to CHS if extended read unsupported.
+- **Multi-stage boot** — Stage 1 (512B MBR) loads Stage 2 from LBA 1-16 via LBA/CHS. Stage 2 (up to 8KB at 0x7E00) reads kernel from LBA 17+ (KERNEL_LBA = 1 + STAGE2_SECTORS), probes RAM via E801, sets VBE, A20, GDT, and transitions to 32-bit PM. Stage 2 has no 512B size limit — enables verbose debug output and easier maintenance. Boot drive passed from Stage 1 to Stage 2 via fixed memory address 0x7BFF.
