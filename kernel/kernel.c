@@ -203,7 +203,11 @@ static void ps_callback(task_t *t, void *arg)
     case TASK_ZOMBIE:   print_string("ZOMBIE"); break;
     default:            print_string("?"); break;
     }
-    print_string(" cpu="); print_int(t->cpu_assigned);
+    print_string(" cpu=");
+    if (t->cpu_assigned < 0)
+        print_string("--");
+    else
+        print_int(t->cpu_assigned);
     print_string(" esp="); print_hex(t->kernel_esp);
     print_string("\n");
 }
