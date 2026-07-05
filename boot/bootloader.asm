@@ -22,11 +22,9 @@ start:
     mov cx, KERNEL_SECTORS
 
     mov dl, [boot_drive]
-    ; (loading msg removed to fit 510-byte limit)
     cmp dl, 0x80
     jb .chs
 
-    ; ── LBA read in 1-sector chunks ──
     mov word [dap_sectors], 1
     mov word [dap_lba], 1
     mov word [dap_buf_seg], es
@@ -49,7 +47,7 @@ start:
 
 .chs:
     push cx
-    pop si                  ; SI = remaining sectors
+    pop si
     mov cl, 2
     xor dh, dh
     xor ch, ch
@@ -77,7 +75,6 @@ start:
     jnz .chs_loop
 
 .loaded:
-    ; ── VBE init: try 800x600x24 (mode 0x115) ──
     xor ax, ax
     mov es, ax
     mov ax, 0x4F01
@@ -106,30 +103,16 @@ start:
     mov dword [0x1000], 0
 .vbe_done:
 
-    ; ── E801 extended memory detection ──
-    ; Returns:
-    ;   AX / CX = extended 1-16 MB in KB (unused; we use CX/DX)
-    ;   BX / DX = extended >16 MB in 64 KB blocks
-    ; Store total RAM in bytes at 0x100C
     mov ax, 0xE801
     int 0x15
-    jc .detect_88
-    cmp ah, 0x80
-    jae .detect_88
-    movzx ecx, cx
-    shl ecx, 10             ; CX * 1024
-    movzx edx, dx
-    shl edx, 16             ; DX * 65536
-    lea eax, [ecx + edx]
-    add eax, 0x100000       ; + 1 MB conventional
-    mov [0x100C], eax
-    jmp .detect_done
-.detect_88:
-    mov ah, 0x88
-    int 0x15
     jc .detect_default
-    movzx eax, ax
-    shl eax, 10
+    cmp ah, 0x80
+    jae .detect_default
+    movzx ecx, cx
+    shl ecx, 10
+    movzx edx, dx
+    shl edx, 16
+    lea eax, [ecx + edx]
     add eax, 0x100000
     mov [0x100C], eax
     jmp .detect_done
@@ -146,39 +129,30 @@ start:
     rep movsb
     jmp switch_to_pm
 
-print_string:
-    push ax
-    push bx
-    mov ah, 0x0E
-    xor bx, bx
-.loop:
-    lodsb
-    or al, al
-    jz .done
-    int 0x10
-    jmp .loop
-.done:
-    pop bx
-    pop ax
-    ret
-
-disk_error:
-    mov si, msg_disk_error
-    call print_string
+; ── 32-bit protected mode trampoline (copied to 0x500, never executed in place) ──
+[bits 32]
+pm_trampoline:
+    mov ax, DATA_SEG
+    mov ds, ax
+    mov ss, ax
+    mov es, ax
+    mov fs, ax
+    mov gs, ax
+    mov esp, 0x90000
+    mov esi, KERNEL_LOAD_ADDR
+    mov edi, KERNEL_OFFSET
+    mov ecx, KERNEL_SECTORS * 128
+    cld
+    rep movsd
+    mov eax, KERNEL_OFFSET
+    call eax
     jmp $
+pm_trampoline_end:
 
-enable_a20:
-    pusha
-    in al, 0x92
-    test al, 2
-    jnz .a20_on
-    or al, 2
-    out 0x92, al
-    mov ax, 0x2401
-    int 0x15
-.a20_on:
-    popa
-    ret
+; ── 16-bit helper functions (never executed after PM entry) ──
+[bits 16]
+disk_error:
+    jmp $
 
 gdt_start:
     dq 0x0000000000000000
@@ -202,30 +176,18 @@ PM_TRAMPOLINE_ADDR equ 0x0500
 switch_to_pm:
     cli
     lgdt [gdt_descriptor]
-    call enable_a20
+    in al, 0x92
+    test al, 2
+    jnz .a20_on
+    or al, 2
+    out 0x92, al
+    mov ax, 0x2401
+    int 0x15
+.a20_on:
     mov eax, cr0
     or eax, 0x01
     mov cr0, eax
     jmp CODE_SEG:PM_TRAMPOLINE_ADDR
-
-[bits 32]
-pm_trampoline:
-    mov ax, DATA_SEG
-    mov ds, ax
-    mov ss, ax
-    mov es, ax
-    mov fs, ax
-    mov gs, ax
-    mov esp, 0x90000
-    mov esi, KERNEL_LOAD_ADDR
-    mov edi, KERNEL_OFFSET
-    mov ecx, KERNEL_SECTORS * 128
-    cld
-    rep movsd
-    mov eax, KERNEL_OFFSET
-    call eax
-    jmp $
-pm_trampoline_end:
 
 boot_drive      db 0
 dap_start:
@@ -235,7 +197,14 @@ dap_sectors:    dw 0
 dap_buf_off:    dw 0
 dap_buf_seg:    dw 0
 dap_lba:        dd 0, 0
-msg_disk_error  db "Disk!", 0
 
-times 510 - ($ - $$) db 0
+; ── MBR Partition Table (VMware/HW BIOS requires at least one entry for HDD boot) ──
+times 446 - ($ - $$) db 0
+db 0x00
+db 0x00, 0x02, 0x00
+db 0x83
+db 0xFE, 0xFF, 0xFF
+dd 0x00000001
+dd 0xFFFFFFFF
+times 48 db 0
 dw 0xAA55
