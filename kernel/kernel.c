@@ -944,11 +944,19 @@ void kernel_main(void)
     /* Create the shell task (READY, added to scheduler's ready list) */
     task_create(shell_main);
 
-    /* Idle loop — timer handler will context-switch between idle and shell */
-    for (;;) {
-        if (!scheduler_step())
-            __asm__ volatile ("hlt");
-    }
+    /* Switch to idle task's stack and start it via IRET.
+     * This ensures the idle task runs on its own allocated stack,
+     * preventing stack sharing when SMP task migration occurs. */
+    __asm__ volatile(
+        "mov %0, %%esp\n"
+        "popl %%gs\n"
+        "popl %%fs\n"
+        "popl %%es\n"
+        "popl %%ds\n"
+        "popa\n"
+        "addl $8, %%esp\n"
+        "iret\n"
+        : : "r"(idle->kernel_esp));
 }
 
 static void shell_main(void)

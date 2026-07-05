@@ -4,6 +4,28 @@
 #include "../drivers/serial.h"
 #include "../apic/lapic.h"
 
+/* Minimal forward declarations for crash debug */
+struct task_s {
+    unsigned int pid;
+    volatile int state;
+    int cpu_assigned;
+    void *page_dir;
+    unsigned int kernel_esp;
+    void *kernel_stack_base;
+    struct task_s *next;
+    unsigned int wakeup_tick;
+};
+typedef struct {
+    int cpu_id;
+    unsigned int apic_id;
+    int state;
+    void *stack_top;
+    struct task_s *current_task;
+    volatile int resched_pending;
+} cpu_info_debug_t;
+extern cpu_info_debug_t cpu_info[8];
+static inline int dbg_cpu_id(void) { int id; __asm__("movl %%gs:0, %0" : "=r"(id)); return id; }
+
 typedef struct {
     unsigned short base_low;
     unsigned short sel;
@@ -242,6 +264,25 @@ static void exception_handler(registers_t *regs)
 
     if (regs->int_no == 0x0E)
         dump_pagefault(regs);
+
+    /* Debug: print current task info from the crashing CPU */
+    {
+        int cpu = dbg_cpu_id();
+        serial_write_string("[dbg] cpu=");
+        serial_write_int(cpu);
+        struct task_s *ct = cpu_info[cpu].current_task;
+        if (ct) {
+            serial_write_string(" pid=");
+            serial_write_int(ct->pid);
+            serial_write_string(" esp=");
+            serial_write_hex(ct->kernel_esp);
+            serial_write_string(" stack_base=");
+            serial_write_hex((unsigned int)ct->kernel_stack_base);
+        } else {
+            serial_write_string(" no task");
+        }
+        serial_write_string("\n");
+    }
 
     dump_registers(regs);
 

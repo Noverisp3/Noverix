@@ -10,7 +10,7 @@
 #define TASK_BLOCKED 3
 #define TASK_ZOMBIE  4
 
-#define TASK_STACK_SIZE 0x1000
+#define TASK_STACK_SIZE 0x4000
 
 typedef struct task {
     unsigned int        pid;

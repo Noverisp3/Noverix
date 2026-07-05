@@ -72,20 +72,19 @@ void ap_main(unsigned int apic_id)
     serial_write_int(cpu_id);
     serial_write_string(" ready\n");
 
-    /* Switch to per-CPU stack, enable interrupts, enter idle loop */
-    __asm__ volatile (
+    /* Switch to idle task's stack and start it via IRET.
+     * This ensures the idle task runs on its own allocated stack,
+     * preventing stack sharing when SMP task migration occurs. */
+    __asm__ volatile(
         "mov %0, %%esp\n"
-        "sti\n"
-        : : "r" (stack_top) : "esp"
-    );
-
-    for (;;) {
-        if (!scheduler_step())
-            __asm__ volatile ("pause");
-    }
-
-    /* Not reached */
-    while (1);
+        "popl %%gs\n"
+        "popl %%fs\n"
+        "popl %%es\n"
+        "popl %%ds\n"
+        "popa\n"
+        "addl $8, %%esp\n"
+        "iret\n"
+        : : "r"(idle->kernel_esp));
 }
 
 void start_aps(void)
