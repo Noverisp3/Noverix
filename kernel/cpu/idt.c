@@ -145,6 +145,7 @@ static void dump_registers(registers_t *regs)
     print_string("EIP: "); print_hex(regs->eip);
     print_string("  CS: "); print_hex(regs->cs);
     print_string("  EFLAGS: "); print_hex(regs->eflags);
+    print_string("  userESP: "); print_hex(regs->useresp);
     print_string("\n\n");
 
     print_string("EAX: "); print_hex(regs->eax);
@@ -157,6 +158,7 @@ static void dump_registers(registers_t *regs)
     print_string("  EDI: "); print_hex(regs->edi);
     print_string("  EBP: "); print_hex(regs->ebp);
     print_string("  ESP: "); print_hex(regs->esp);
+    print_string("  SS: "); print_hex(regs->ss);
     print_string("\n\n");
 
     print_string("DS: "); print_hex(regs->ds);
@@ -169,6 +171,29 @@ static void dump_registers(registers_t *regs)
     print_string("  CR2: "); print_hex(read_cr2());
     print_string("  CR3: "); print_hex(read_cr3());
     print_string("\n");
+}
+
+static void dump_stack(registers_t *regs)
+{
+    unsigned int esp = (regs->cs & 3) ? regs->useresp : regs->esp;
+    if (!esp) return;
+
+    print_string("Stack dump (user ESP=");
+    print_hex(esp);
+    print_string("):\n");
+
+    unsigned int *sp = (unsigned int *)(esp & ~0xFFF);
+    for (int i = 0; i < 64; i++) {
+        unsigned int addr = (unsigned int)sp + i * 4;
+        print_hex(addr);
+        print_string(": ");
+        if (addr >= esp - 16 && addr <= esp + 16)
+            print_string("=> ");
+        else
+            print_string("   ");
+        print_hex(sp[i]);
+        print_string("\n");
+    }
 }
 
 static void dump_pagefault(registers_t *regs)
@@ -222,6 +247,8 @@ static void exception_handler(registers_t *regs)
 
     dump_backtrace(regs);
 
+    dump_stack(regs);
+
     print_string("\nSystem halted.\n");
 
     serial_write_string("\n!!! CPU EXCEPTION !!!\n");
@@ -233,10 +260,27 @@ static void exception_handler(registers_t *regs)
     serial_write_string("Error code: "); serial_write_hex(regs->err_code);
     serial_write_string(" EIP: "); serial_write_hex(regs->eip);
     serial_write_string(" CS: "); serial_write_hex(regs->cs);
+    serial_write_string(" userESP: "); serial_write_hex(regs->useresp);
+    serial_write_string(" SS: "); serial_write_hex(regs->ss);
     serial_write_string("\n");
-    if (regs->int_no == 0x0E)
-        serial_write_hex(read_cr2());
+    serial_write_string("EAX="); serial_write_hex(regs->eax);
+    serial_write_string(" EBX="); serial_write_hex(regs->ebx);
+    serial_write_string(" ECX="); serial_write_hex(regs->ecx);
+    serial_write_string(" EDX="); serial_write_hex(regs->edx);
     serial_write_string("\n");
+    serial_write_string("ESI="); serial_write_hex(regs->esi);
+    serial_write_string(" EDI="); serial_write_hex(regs->edi);
+    serial_write_string(" EBP="); serial_write_hex(regs->ebp);
+    serial_write_string("\n");
+    serial_write_string("DS="); serial_write_hex(regs->ds);
+    serial_write_string(" ES="); serial_write_hex(regs->es);
+    serial_write_string(" FS="); serial_write_hex(regs->fs);
+    serial_write_string(" GS="); serial_write_hex(regs->gs);
+    serial_write_string("\n");
+    if (regs->int_no == 0x0E) {
+        serial_write_string("CR2="); serial_write_hex(read_cr2());
+        serial_write_string("\n");
+    }
 
     __asm__ volatile ("cli; hlt");
     while (1);
