@@ -189,7 +189,7 @@ void task_idle_loop(void)
 void task_foreach(task_callback_t cb, void *arg)
 {
     if (!ready_head) return;
-    spinlock_lock(&sched_lock);
+    unsigned int flags = spinlock_lock_irqsave(&sched_lock);
     task_t *start = ready_head;
     task_t *t = start;
     do {
@@ -197,18 +197,18 @@ void task_foreach(task_callback_t cb, void *arg)
         cb(t, arg);
         t = next;
     } while (t != start);
-    spinlock_unlock(&sched_lock);
+    spinlock_unlock_irqrestore(&sched_lock, flags);
 }
 
 int task_kill(unsigned int pid)
 {
     if (!ready_head) return -1;
-    spinlock_lock(&sched_lock);
+    unsigned int flags = spinlock_lock_irqsave(&sched_lock);
     task_t *t = ready_head;
     do {
         if (t->pid == pid) {
             if (t->state == TASK_RUNNING) {
-                spinlock_unlock(&sched_lock);
+                spinlock_unlock_irqrestore(&sched_lock, flags);
                 return -2;
             }
             /* Remove from circular list */
@@ -246,12 +246,12 @@ int task_kill(unsigned int pid)
                 free_frames(t->kernel_stack_base, TASK_STACK_SIZE >> 12);
                 t->kernel_stack_base = 0;
             }
-            spinlock_unlock(&sched_lock);
+            spinlock_unlock_irqrestore(&sched_lock, flags);
             return 0;
         }
         t = t->next;
     } while (t != ready_head);
-    spinlock_unlock(&sched_lock);
+    spinlock_unlock_irqrestore(&sched_lock, flags);
     return -1;
 }
 
