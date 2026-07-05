@@ -5,7 +5,6 @@
 #include "cpu/gdt.h"
 #include "cpu/timer.h"
 #include "scheduler/scheduler.h"
-#include "drivers/serial.h"
 #include "lib.h"
 
 spinlock_t sched_lock;
@@ -254,15 +253,6 @@ int task_kill(unsigned int pid)
     } while (t != ready_head);
     spinlock_unlock_irqrestore(&sched_lock, flags);
     return -1;
-}
-
-void debug_ctx_switch(unsigned int kernel_esp, unsigned int frame_eip)
-{
-    serial_write_string("[ctx] esp=");
-    serial_write_hex(kernel_esp);
-    serial_write_string(" eip=");
-    serial_write_hex(frame_eip);
-    serial_write_string("\n");
 }
 
 void task_init(void)

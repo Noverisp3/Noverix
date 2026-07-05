@@ -153,10 +153,6 @@ irq_common:
     addl $4, %esp
     test %eax, %eax
     jz .Lno_switch_irq
-    pushl 56(%eax)   /* EIP from new frame (offset 14*4) */
-    pushl %eax       /* kernel_esp */
-    call debug_ctx_switch
-    addl $8, %esp
     mov %eax, %esp
 .Lno_switch_irq:
     popl %gs
