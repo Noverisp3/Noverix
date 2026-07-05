@@ -182,7 +182,7 @@ void task_idle_loop(void)
 {
     for (;;) {
         if (!scheduler_step())
-            __asm__ volatile ("pause");
+            __asm__ volatile ("hlt");
     }
 }
 
