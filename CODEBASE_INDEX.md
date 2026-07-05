@@ -28,7 +28,8 @@ BIOS
              ├─ kernel/drivers/ata.c   → ATA probe
              ├─ kernel/drivers/nvfs.c  → mount NVFS from ATA LBA
              ├─ kernel/cpu/ap_startup.c → start_aps() → INIT+SIPI → APs boot
-             ├─ kernel/scheduler/scheduler.c → init work queue
+              ├─ kernel/task.c → preemptive round-robin task mgr (PID, timer IRQ switch)
+              ├─ kernel/scheduler/scheduler.c → init work queue
              └─ while(1): readline → handle_cmd → dispatch
 ```
 
@@ -49,6 +50,7 @@ Project_002_OS/
 │   ├── lib.c / lib.h         # Shared utilities: memcpy, memset, strlen, strcpy, strcmp
 │   ├── sync/
 │   │   └── sync.h            # Spinlocks (irqsave), atomic ops, memory barriers
+│   ├── task.c / task.h       # Preemptive round-robin task manager (PID, timer-driven switch)
 │   ├── scheduler/
 │   │   ├── scheduler.c / .h  # SMP work queue: submit, step, wait_all, 64 slots
 │   ├── cpu/
@@ -153,11 +155,13 @@ Project_002_OS/
   - `spin_unlock(lock)`: Store 0 + barrier | [barrier]
   - `spin_lock_irqsave(lock, flags)`: `pushf; cli; spin_lock` | [spin_lock]
   - `spin_unlock_irqrestore(lock, flags)`: `spin_unlock; popf` | [spin_unlock]
+  - `spinlock_try_lock(lock)`: `xchg(lock, 1)` → returns 1 if acquired, 0 if already locked (non-blocking) | [atomic_xchg]
   - `atomic_inc(var)`: `lock incl` | []
   - `atomic_dec(var)`: `lock decl` | []
   - `atomic_xchg(ptr, val)`: `xchg` with memory clobber | []
   - `barrier()`: `asm volatile("" ::: "memory")` — compiler barrier | []
 - **Lock ordering:** `screen_lock → serial_lock`, `paging_lock → pfa_lock`. No circular dependencies.
+- **`spinlock_try_lock`** used by keyboard ISR to avoid deadlock when user task holds `kb_lock` — drops keystrokes under contention instead of deadlocking.
 
 ---
 
@@ -185,7 +189,7 @@ Project_002_OS/
 
 ### `kernel/cpu/gdt.c` + `kernel/cpu/gdt.h`
 
-- **Role:** Per-CPU GDT with 7 entries (null, code, data, user_code, user_data, TSS, per-CPU data segment). Each CPU has its own GDT with unique TSS and `%gs` base.
+- **Role:** Per-CPU GDT with 7 entries (null, code=0x08, data=0x10, user_code=0x1B, user_data=0x23, TSS, per-CPU data segment). Each CPU has its own GDT with unique TSS and `%gs` base.
 - **Struct:** `gdt_entry_t` (8 bytes), `gdt_ptr_t` (packed 6 bytes), `tss_entry_t` (104 bytes)
 - **Functions:**
   - `gdt_set_entry(num, base, limit, access, gran)`: Write 8-byte descriptor | []
@@ -385,6 +389,7 @@ Project_002_OS/
   - `read_cr0(void)`: Return CR0 | []
   - `read_cr3(void)`: Return CR3 | []
 - **Import:** `pfa.h`, `serial.h`
+- **User-space paging:** `paging_enable_user_access()` globally sets `PAGE_USER` on all existing page table entries. `page_dir_add_user_flag()` modifies the page directory to add `PAGE_USER` to every PDE/PTE. Used during ELF init to allow user-mode access to kernel-mapped pages (heap, screen buffers, framebuffer).
 
 ---
 
@@ -402,19 +407,23 @@ Project_002_OS/
   - `set_footer(addr, size)`: Write size at block end (for boundary tag) | []
 - **Import:** `serial.h`
 - **Bug fix:** Removed `prev_addr = (unsigned int)prev_hdr;` in backward merge (`free()`). This line assigned `prev_addr` the address of a local stack pointer instead of the heap block address, causing wrong footer and heap corruption.
+- **User-safe wrappers:** `malloc_user()`, `free_user()`, `realloc_user()` — identical to kernel versions but use `spinlock_lock`/`spinlock_unlock` (no `cli`) to avoid GPF when called from ring 3.
 
 ---
 
 ### `kernel/elf.c` + `elf.h`
 
-- **Role:** ELF loader — loads 32-bit ELF executables from NVFS and switches to user-space.
-- **Constants:** `ELF_MAGIC=0x464C457F`, `PT_LOAD=1`, `SYSCALL_INT=0x80`
+- **Role:** ELF loader — loads 32-bit ELF executables from NVFS and creates ring-3 user tasks.
+- **Constants:** `ELF_MAGIC=0x464C457F`, `PT_LOAD=1`, `SYSCALL_INT=0x80`, `USER_CS=0x1B`, `USER_DS=0x23`, `USER_STACK_ADDR=0x009FF000`, `USER_ENTRY_MIN=0x00800000`, `USER_ENTRY_MAX=0x00A00000`
 - **Functions:**
-  - `elf_exec(path)`: Read ELF file from NVFS → validate magic → parse program headers → validate e_entry (must be within 0x00800000–0x00A00000) → validate phoff and phentsize → for each segment check p_offset+p_filesz overflow and p_vaddr+p_memsz overflow → validate segment end ≤ 0x00A00000 → allocate pages → load segments → set up user stack → jump to entry point | [nvfs_read, alloc_frame, map_page, serial_write_string]
-  - `syscall_handler(regs)`: Handle software interrupt 0x80 (syscall dispatch) | []
-- **Import:** `nvfs.h`, `pfa.h`, `paging.h`, `idt.h`, `serial.h`
-- **User-space execution:** `elf_exec` maps the ELF segments into memory below the kernel, sets up a minimal user stack, and jumps to the entry point with CS=user_code and DS=user_data segments.
-- **Security:** ELF header validation (magic, phentsize ≥ sizeof(phdr), e_entry bounds 0x00800000–0x00A00000). Per-segment bounds checks with integer overflow guards. All segment loads must stay within the allowed range. Rejects malformed/invalid ELFs with serial-logged errors. Basic memory isolation — user-space code runs in ring 3 segments. Syscalls return to kernel via interrupt 0x80.
+  - `elf_exec(path)`: Read ELF from NVFS → validate magic/headers → enable user paging → allocate pages for segments + stack → load segments into user pages → set up IRET frame (CS=0x1B, SS=0x23, DS/ES/FS/GS=0x23, EFLAGS=0x200) → create task via `alloc_task()` with `kernel_api` struct → switch to user via timer preemption | [nvfs_read, alloc_frame, map_page, paging_enable_user_access, serial_write_string, alloc_task]
+  - `syscall_handler(regs)`: Handle interrupt 0x80 — dispatch SYS_EXIT (cleanup + scheduler switch) | []
+  - `kernel_api` struct: Function pointer table exposing ~30 user-safe entry points (clear_screen, print_string, print_char, print_hex, print_int, draw_pixel, fill_rect, draw_char, draw_string, draw_line, scroll, get_char, read_char, malloc, free, realloc, sleep_ms, get_ticks, fb_cols, fb_rows, nvfs_list, nvfs_read, nvfs_write, nvfs_delete, nvfs_mkdir, nvfs_rmdir, nvfs_chdir, nvfs_cwd, nvfs_errno, nvfs_strerror) — all use `spinlock_lock` wrappers (no `cli`) safe for ring 3.
+- **Import:** `nvfs.h`, `pfa.h`, `paging.h`, `idt.h`, `serial.h`, `task.h`
+- **User-space execution:** ELF segments mapped into 0x00800000–0x00A00000 region. IRET frame sets CS=0x1B (user code, RPL=3), SS=DS=ES=FS=GS=0x23 (user data, RPL=3), EFLAGS=0x200 (IF=1). User task created as preemptive PID via `alloc_task()`.
+- **API calls:** User code invokes kernel functions via direct function-call through a pointer table (`kernel_api` pointer passed in ESI/register). No syscall overhead for most operations — only `SYS_EXIT` uses `int 0x80` because it requires privilege escalation to clean up task state.
+- **Segment selectors:** CS=0x1B (GDT index 3 with RPL=3), SS/DS/ES/FS/GS=0x23 (GDT index 4 with RPL=3). These match the GDT entries set up by `gdt_init_percpu()`.
+- **Security:** ELF header validation (magic, phentsize ≥ sizeof(phdr), e_entry bounds 0x00800000–0x00A00000). Per-segment bounds checks with integer overflow guards. All segment loads must stay within the allowed range. Rejects malformed/invalid ELFs with serial-logged errors. Memory isolation via ring 3 segments. `PAGE_USER` set on all accessible pages. `cli`-based instructions GPF at CPL=3 — all API wrappers use non-irqsave spinlocks.
 
 ---
 
@@ -515,6 +524,8 @@ Project_002_OS/
   - `keyboard_set_typematic(param)`: Send PS/2 command 0xF3 to configure repeat rate/delay | [inb, outb]
   - `keyboard_get_typematic(void)`: Return current typematic parameter byte | []
 - **Import:** `ports.h`, `idt.h`
+- **User-safe wrappers:** `get_char_user()`, `read_char_user()` — use `spinlock_lock`/`spinlock_unlock` (no `cli`) instead of `spin_lock_irqsave`/`spin_unlock_irqrestore` to avoid GPF at CPL=3.
+- **ISR deadlock avoidance:** `keyboard_handler` uses `spinlock_try_lock` instead of `spin_lock_irqsave` — if user task holds `kb_lock` (e.g., blocked in `read_char_user`), the ISR drops the keystroke instead of deadlocking.
 
 ---
 
@@ -540,6 +551,7 @@ Project_002_OS/
   - `set_capture(on)`: Enable/disable capture mode, reset `capture_pos` on enable, null-terminate on disable | []
   - `get_capture(void)`: Null-terminate and return pointer to captured output | []
 - **Import:** `ports.h`, `serial.h`, `graphics.h`, `font.h`
+- **User-safe wrappers:** `clear_screen_user()`, `print_string_user()`, `print_char_user()`, `print_hex_user()`, `print_int_user()`, `set_cursor_user()` — identical behavior but use `spinlock_lock`/`spinlock_unlock` (no `cli`) to avoid GPF at CPL=3.
 
 ---
 
@@ -569,8 +581,8 @@ Project_002_OS/
   - `fill_rect(x, y, w, h, color)`: Fill rectangle with solid color | [pixel_write]
   - `draw_char_gfx(x, y, c, fg, bg)`: Render 8×16 bitmap char at pixel position | [char_row, pixel_write]
   - `scroll_gfx(lines)`: Scroll framebuffer up by N lines (font rows) | [fill_rect]
-  - `fb_cols(void)`: Return `fb_width / FONT_WIDTH` | []
-  - `fb_rows(void)`: Return `fb_height / FONT_HEIGHT` | []
+  - `fb_cols(void)`: Return `fb_width` (pixel columns, e.g. 800) | []
+  - `fb_rows(void)`: Return `fb_height` (pixel rows, e.g. 600) | []
 - **Internal:**
   - `pixel_write(ptr, color)`: Write 24/32-bit color to framebuffer address | []
   - `char_row(c, row)`: Look up font bitmap row for character | []
@@ -601,6 +613,25 @@ Project_002_OS/
 
 ---
 
+### `kernel/task.c` + `task.h`
+
+- **Role:** Preemptive round-robin task manager (PID-based). Manages kernel and user tasks with timer-driven preemptive switching.
+- **Constants:** `TASK_FREE=0`, `TASK_READY=1`, `TASK_RUNNING=2`, `TASK_BLOCKED=3`, `TASK_ZOMBIE=4`, `TASK_STACK_SIZE=0x1000`
+- **Struct:**
+  - `task_t`: {pid (uint), state (volatile int), cpu_assigned (int), page_dir (page_dir_t), kernel_esp (uint), kernel_stack_base (void*), next (task_t*)} — circular linked list
+- **Global:** `ready_head` (circular list root), `sched_lock` (spinlock), `next_pid` counter
+- **Functions:**
+  - `task_init(void)`: Init sched_lock, clear ready_head, set next_pid=1, set current_task=0 | [spinlock_init]
+  - `alloc_task(void)`: Allocate frame from PFA → zero → assign next_pid++ → return task_t* (used by elf.c for user tasks) | [alloc_frame]
+  - `task_create(entry)`: Create kernel task: allocate stack → set up IRET frame (CS=0x08, EFLAGS=0x202) → set kernel_esp → set page_dir = kernel → add to ready list | [alloc_task, alloc_frames, spinlock_lock]
+  - `task_switch_tick(current_esp)`: Timer-tick entry: save CPU state → pick_next_locked() → switch page_dir → load new ESP. Called from timer ISR. Returns new task's kernel_esp or 0 for no switch | [spinlock_lock, pick_next_locked, gdt_set_kernel_stack, page_dir_switch]
+  - `task_idle_loop(void)`: AP idle loop — call scheduler_step(), pause if no work | [scheduler_step]
+  - `pick_next_locked()`: Internal — scan circular ready list for TASK_READY tasks not assigned to another CPU | []
+- **Import:** `pfa.h`, `paging.h`, `gdt.h`, `timer.h`, `cpu.h`, `scheduler.h`, `serial.h`
+- **Preemptive switching:** Timer ISR calls `task_switch_tick()` every ~10ms (100Hz). If `task_switch_pending` is set (by elf_exec), performs round-robin switch. Saves current kernel_esp, searches for next READY task, switches kernel stack + page directory.
+- **User task switching:** When switching to a user task, `task_switch_tick` returns the kernel_esp of the new task. The interrupt return path (IRET) pops the user-mode frame (CS=0x1B, EIP=user_entry) from the new stack, entering ring 3 transparently.
+- **Circular ready list:** Tasks form a singly-linked circular list. `pick_next_locked` starts from current and wraps around. Multiple CPUs can own separate tasks — `cpu_assigned` prevents duplicate scheduling.
+
 ### `kernel/scheduler/scheduler.c` + `kernel/scheduler/scheduler.h`
 
 - **Role:** SMP work queue scheduler — pull-based model for parallel task execution across CPUs.
@@ -616,3 +647,25 @@ Project_002_OS/
   - `scheduler_wait_all(void)`: Spin (calling scheduler_step to also process tasks) until all submitted tasks are FREE. BSP participates in work execution during wait | [scheduler_step]
 - **Import:** `sync.h`
 - **Usage:** BSP submits tasks, any idle CPU picks them. `smp` shell command submits 4 sum tasks. AP idle loop calls `scheduler_step()` in a `pause` loop.
+
+---
+
+### `tests/triangle.c`
+
+- **Role:** Ring-3 user-space Sierpinski triangle demo. Compiled as ELF executable loaded by `elf_exec`.
+- **Flow:** `main(void *arg)`: set DS/ES/FS/GS=0x23 (user data) → `is_graphics_active()` check → `clear_screen()` → chaos game: pick random vertex, draw midpoint pixel (50000 iterations with 10ms sleep) → "done" message → `exit()`.
+- **API interface:** Receives `noverix_api_t` function pointer table via `arg` (ESR from ELF loader). Calls: `clear_screen`, `print_string`, `draw_pixel`, `sleep_ms`, `get_ticks`, `fb_cols`, `fb_rows`, `read_char`, `exit`. No syscall overhead — direct function calls.
+- **Segment init:** `mov %0, %%ds` etc. inline asm at entry to set DS/ES/FS/GS=0x23 (user data segment with RPL=3). Required because x86 does not automatically restore segment registers on IRET to ring 3.
+- **Build:** Compiled `-m32 -ffreestanding -fno-pie -fno-pic`, linked with `tests/app.ld` at load address 0x00800000. Output: `rootfs/triangle.elf`.
+
+### `tests/noverix.h`
+
+- **Role:** User-space API header. Defines `noverix_api_t` struct — function pointer table matching `kernel_api` in `elf.c`.
+- **Fields:** ~30 function pointers covering screen (clear, print, cursor), keyboard (get_char, read_char), graphics (draw_pixel, fill_rect, fb_cols, fb_rows), timer (sleep_ms, get_ticks), heap (malloc, free), NVFS (read, write, delete, mkdir, rmdir, chdir, list, strerror), and exit.
+- **Layout must match** `kernel_api` struct in `elf.c` exactly — same field order and pointer size.
+
+### `tests/app.ld`
+
+- **Role:** Linker script for user-space ELF executables.
+- **Layout:** Text, data, BSS sections starting at `0x00800000` (8 MB — above kernel heap at 0x800000–0xA00000).
+- **Entry:** `main` — called by user-space startup with `noverix_api_t*` in argument register.
