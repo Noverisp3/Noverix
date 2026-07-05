@@ -37,4 +37,8 @@ unsigned int task_block_and_switch(unsigned int current_esp, unsigned int wakeup
 unsigned int task_yield(unsigned int current_esp);
 void task_idle_loop(void);
 
+typedef void (*task_callback_t)(task_t *t, void *arg);
+void task_foreach(task_callback_t cb, void *arg);
+int task_kill(unsigned int pid);
+
 #endif

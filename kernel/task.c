@@ -186,6 +186,75 @@ void task_idle_loop(void)
     }
 }
 
+void task_foreach(task_callback_t cb, void *arg)
+{
+    if (!ready_head) return;
+    spinlock_lock(&sched_lock);
+    task_t *start = ready_head;
+    task_t *t = start;
+    do {
+        task_t *next = t->next;
+        cb(t, arg);
+        t = next;
+    } while (t != start);
+    spinlock_unlock(&sched_lock);
+}
+
+int task_kill(unsigned int pid)
+{
+    if (!ready_head) return -1;
+    spinlock_lock(&sched_lock);
+    task_t *t = ready_head;
+    do {
+        if (t->pid == pid) {
+            if (t->state == TASK_RUNNING) {
+                spinlock_unlock(&sched_lock);
+                return -2;
+            }
+            /* Remove from circular list */
+            if (t->next == t) {
+                ready_head = 0;
+            } else {
+                /* Find previous node */
+                task_t *p = t;
+                while (p->next != t)
+                    p = p->next;
+                p->next = t->next;
+                if (ready_head == t)
+                    ready_head = t->next;
+            }
+            t->state = TASK_FREE;
+            t->cpu_assigned = -1;
+            /* Free user resources (page dir, kernel stack) */
+            if (t->page_dir && t->page_dir != kernel_page_dir) {
+                for (int i = 0; i < 1024; i++) {
+                    if (t->page_dir[i] == kernel_page_dir[i])
+                        continue;
+                    if (t->page_dir[i] & PAGE_PRESENT) {
+                        page_table_entry_t *pt = (page_table_entry_t *)(t->page_dir[i] & 0xFFFFF000);
+                        for (int j = 0; j < 1024; j++) {
+                            if (pt[j] & PAGE_PRESENT)
+                                free_frame((void *)(pt[j] & 0xFFFFF000));
+                        }
+                        free_frame((void *)pt);
+                    }
+                }
+                free_frame((void *)t->page_dir);
+                t->page_dir = 0;
+            }
+            if (t->kernel_stack_base) {
+                free_frames(t->kernel_stack_base, TASK_STACK_SIZE >> 12);
+                t->kernel_stack_base = 0;
+            }
+            spinlock_unlock(&sched_lock);
+            return 0;
+        }
+        t = t->next;
+    } while (t != ready_head);
+    spinlock_unlock(&sched_lock);
+    return -1;
+}
+
 void task_init(void)
 {
     int cpu = get_cpu_id();

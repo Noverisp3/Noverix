@@ -190,6 +190,24 @@ static void sum_worker(void *arg)
 
 static void shell_main(void);
 
+static void ps_callback(task_t *t, void *arg)
+{
+    (void)arg;
+    print_string("  PID="); print_int(t->pid);
+    print_string(" state=");
+    switch (t->state) {
+    case TASK_FREE:     print_string("FREE"); break;
+    case TASK_READY:    print_string("READY"); break;
+    case TASK_RUNNING:  print_string("RUN"); break;
+    case TASK_BLOCKED:  print_string("BLOCK"); break;
+    case TASK_ZOMBIE:   print_string("ZOMBIE"); break;
+    default:            print_string("?"); break;
+    }
+    print_string(" cpu="); print_int(t->cpu_assigned);
+    print_string(" esp="); print_hex(t->kernel_esp);
+    print_string("\n");
+}
+
 static void execute_cmd(const char *cmd, char *arg)
 {
     if (lib_strcmp(cmd, "help") == 0 || lib_strcmp(cmd, "?") == 0) {
@@ -219,6 +237,8 @@ static void execute_cmd(const char *cmd, char *arg)
         print_string("rate     Set keyboard repeat rate: rate <delay:0-3> <rate:0-31>\n");
         print_string("smp      Run N parallel tasks across all CPUs\n");
         print_string("cpus     Show CPU info\n");
+        print_string("ps       List running tasks\n");
+        print_string("kill     Kill a task by PID: kill <pid>\n");
     } else if (lib_strcmp(cmd, "echo") == 0) {
         int is_append = 0;
         char *redir = arg;
@@ -490,6 +510,24 @@ static void execute_cmd(const char *cmd, char *arg)
             print_string(" state=");
             print_int(cpu_info[i].state);
             print_string("\n");
+        }
+    } else if (lib_strcmp(cmd, "ps") == 0) {
+        task_foreach(ps_callback, 0);
+    } else if (lib_strcmp(cmd, "kill") == 0) {
+        if (!arg[0]) {
+            print_string("Usage: kill <pid>\n");
+        } else {
+            unsigned int pid = 0;
+            int k = 0;
+            while (arg[k] >= '0' && arg[k] <= '9')
+                pid = pid * 10 + (arg[k++] - '0');
+            int ret = task_kill(pid);
+            if (ret == 0)
+                print_string("Killed.\n");
+            else if (ret == -2)
+                print_string("Cannot kill running task.\n");
+            else
+                print_string("No such task.\n");
         }
     } else if (cmd[0]) {
         print_string("Unknown command: ");
