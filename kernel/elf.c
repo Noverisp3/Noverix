@@ -3,11 +3,13 @@
 #include "drivers/screen.h"
 #include "drivers/serial.h"
 #include "drivers/keyboard.h"
+#include "drivers/graphics.h"
 #include "lib.h"
 #include "task.h"
 #include "cpu/cpu.h"
 #include "cpu/gdt.h"
 #include "cpu/idt.h"
+#include "cpu/timer.h"
 #include "memory/pfa.h"
 #include "memory/paging.h"
 #include "memory/heap.h"
@@ -16,108 +18,14 @@
 #define USER_ELF_LIMIT     0x00900000
 #define USER_STACK_TOP     0x00A00000
 #define USER_STACK_SIZE    0x1000
-#define USER_API_ADDR      0x009FF000
-#define USER_ENTRY_TRAMP   0x009FFC00
 #define USER_EXIT_TRAMP    0x009FFE00
-#define USER_PDE_IDX       2  /* 0x800000 >> 22 */
-
-#define SYS_EXIT 0
-
-typedef struct {
-    void (*clear_screen)(void);
-    void (*print_char)(char c);
-    void (*print_string)(const char *str);
-    void (*print_hex)(unsigned int num);
-    void (*print_int)(unsigned int num);
-    int (*get_cursor_x)(void);
-    int (*get_cursor_y)(void);
-    void (*set_cursor)(int x, int y);
-
-    char (*get_char)(void);
-    char (*read_char)(void);
-
-    int (*is_graphics_active)(void);
-    void (*draw_pixel)(int x, int y, unsigned int color);
-    void (*fill_rect)(int x, int y, int w, int h, unsigned int color);
-    int (*fb_cols)(void);
-    int (*fb_rows)(void);
-
-    void (*sleep_ms)(unsigned int ms);
-    unsigned int (*get_ticks)(void);
-
-    void *(*malloc)(unsigned int size);
-    void (*free)(void *ptr);
-
-    int (*nvfs_read)(const char *path, void *out, unsigned max);
-    int (*nvfs_write)(const char *path, const void *data, unsigned size);
-    int (*nvfs_append)(const char *path, const void *data, unsigned size);
-    int (*nvfs_delete)(const char *path);
-    int (*nvfs_mkdir)(const char *path);
-    int (*nvfs_rmdir)(const char *path);
-    int (*nvfs_chdir)(const char *path, unsigned *out_inode);
-    unsigned (*nvfs_get_cwd)(void);
-    int (*nvfs_list)(const char *path);
-    const char *(*nvfs_strerror)(int err);
-    int (*nvfs_is_mounted)(void);
-    void (*exit)(void);
-} noverix_api_t;
-
-extern int is_graphics_active(void);
-extern void draw_pixel(int x, int y, unsigned int color);
-extern void fill_rect(int x, int y, int w, int h, unsigned int color);
-extern int fb_cols(void);
-extern int fb_rows(void);
-extern void sleep_ms(unsigned int ms);
-extern unsigned int get_ticks(void);
-
-
-static void user_exit(void)
-{
-    __asm__ volatile ("mov %0, %%eax; int $0x80" : : "i" (SYS_EXIT) : "eax");
-}
-
-static noverix_api_t kernel_api = {
-    .clear_screen = clear_screen_user,
-    .print_char = print_char_user,
-    .print_string = print_string_user,
-    .print_hex = print_hex_user,
-    .print_int = print_int_user,
-    .get_cursor_x = get_cursor_x,
-    .get_cursor_y = get_cursor_y,
-    .set_cursor = set_cursor_user,
-    .get_char = get_char_user,
-    .read_char = read_char_user,
-    .is_graphics_active = is_graphics_active,
-    .draw_pixel = draw_pixel,
-    .fill_rect = fill_rect,
-    .fb_cols = fb_cols,
-    .fb_rows = fb_rows,
-    .sleep_ms = sleep_ms,
-    .get_ticks = get_ticks,
-    .malloc = malloc_user,
-    .free = free_user,
-    .nvfs_read = nvfs_read,
-    .nvfs_write = nvfs_write,
-    .nvfs_append = nvfs_append,
-    .nvfs_delete = nvfs_delete,
-    .nvfs_mkdir = nvfs_mkdir,
-    .nvfs_rmdir = nvfs_rmdir,
-    .nvfs_chdir = nvfs_chdir,
-    .nvfs_get_cwd = nvfs_get_cwd,
-    .nvfs_list = nvfs_list,
-    .nvfs_strerror = nvfs_strerror,
-    .nvfs_is_mounted = nvfs_is_mounted,
-    .exit = user_exit
-};
-
-
+#define USER_PDE_IDX       2
 
 static unsigned char elf_load_buf[128 * 1024];
 
 static void free_task_resources(task_t *t)
 {
     if (t->page_dir && t->page_dir != kernel_page_dir) {
-        /* Free per-process page tables and their physical pages */
         for (int i = 0; i < 1024; i++) {
             if (t->page_dir[i] == kernel_page_dir[i])
                 continue;
@@ -142,9 +50,9 @@ static void free_task_resources(task_t *t)
 
 unsigned int syscall_handler(registers_t *regs)
 {
-    unsigned int syscall_num = regs->eax;
+    unsigned int num = regs->eax;
 
-    switch (syscall_num) {
+    switch (num) {
     case SYS_EXIT:
     {
         serial_write_string("[elf] user task exit\n");
@@ -157,7 +65,6 @@ unsigned int syscall_handler(registers_t *regs)
         curr->state = TASK_FREE;
         curr->cpu_assigned = -1;
 
-        /* Pick next READY task (skip current) */
         task_t *next = ready_head;
         task_t *scan = next;
         if (scan) {
@@ -171,7 +78,6 @@ unsigned int syscall_handler(registers_t *regs)
             } while (scan != ready_head);
         }
 
-        /* No other task — switch to idle */
         cpu_info[cpu].current_task = 0;
         spinlock_unlock(&sched_lock);
         page_dir_switch(kernel_page_dir);
@@ -187,10 +93,141 @@ unsigned int syscall_handler(registers_t *regs)
         page_dir_switch(next->page_dir);
         return next->kernel_esp;
     }
+
+    case SYS_CLEAR_SCREEN:
+        clear_screen();
+        regs->eax = 0;
+        return (unsigned int)regs;
+
+    case SYS_PRINT_CHAR:
+        print_char((char)regs->ebx);
+        regs->eax = 0;
+        return (unsigned int)regs;
+
+    case SYS_PRINT_STRING:
+        print_string((const char *)regs->ebx);
+        regs->eax = 0;
+        return (unsigned int)regs;
+
+    case SYS_PRINT_HEX:
+        print_hex(regs->ebx);
+        regs->eax = 0;
+        return (unsigned int)regs;
+
+    case SYS_PRINT_INT:
+        print_int(regs->ebx);
+        regs->eax = 0;
+        return (unsigned int)regs;
+
+    case SYS_SET_CURSOR:
+        set_cursor((int)regs->ebx, (int)regs->ecx);
+        regs->eax = 0;
+        return (unsigned int)regs;
+
+    case SYS_GET_CHAR:
+        regs->eax = (unsigned int)(unsigned char)get_char();
+        return (unsigned int)regs;
+
+    case SYS_READ_CHAR:
+        regs->eax = (unsigned int)(unsigned char)read_char();
+        return (unsigned int)regs;
+
+    case SYS_IS_GRAPHICS:
+        regs->eax = is_graphics_active() ? 1 : 0;
+        return (unsigned int)regs;
+
+    case SYS_DRAW_PIXEL:
+        draw_pixel((int)regs->ebx, (int)regs->ecx, regs->edx);
+        regs->eax = 0;
+        return (unsigned int)regs;
+
+    case SYS_FILL_RECT:
+        fill_rect((int)regs->ebx, (int)regs->ecx, (int)regs->edx,
+                  (int)regs->esi, regs->edi);
+        regs->eax = 0;
+        return (unsigned int)regs;
+
+    case SYS_FB_COLS:
+        regs->eax = (unsigned int)fb_cols();
+        return (unsigned int)regs;
+
+    case SYS_FB_ROWS:
+        regs->eax = (unsigned int)fb_rows();
+        return (unsigned int)regs;
+
+    case SYS_SLEEP_MS:
+        sleep_ms(regs->ebx);
+        regs->eax = 0;
+        return (unsigned int)regs;
+
+    case SYS_GET_TICKS:
+        regs->eax = get_ticks();
+        return (unsigned int)regs;
+
+    case SYS_MALLOC:
+        regs->eax = (unsigned int)malloc_user(regs->ebx);
+        return (unsigned int)regs;
+
+    case SYS_FREE:
+        free_user((void *)regs->ebx);
+        regs->eax = 0;
+        return (unsigned int)regs;
+
+    case SYS_NVFS_READ:
+        regs->eax = (unsigned int)nvfs_read((const char *)regs->ebx,
+                                            (void *)regs->ecx, regs->edx);
+        return (unsigned int)regs;
+
+    case SYS_NVFS_WRITE:
+        regs->eax = (unsigned int)nvfs_write((const char *)regs->ebx,
+                                             (const void *)regs->ecx, regs->edx);
+        return (unsigned int)regs;
+
+    case SYS_NVFS_APPEND:
+        regs->eax = (unsigned int)nvfs_append((const char *)regs->ebx,
+                                              (const void *)regs->ecx, regs->edx);
+        return (unsigned int)regs;
+
+    case SYS_NVFS_DELETE:
+        regs->eax = (unsigned int)nvfs_delete((const char *)regs->ebx);
+        return (unsigned int)regs;
+
+    case SYS_NVFS_MKDIR:
+        regs->eax = (unsigned int)nvfs_mkdir((const char *)regs->ebx);
+        return (unsigned int)regs;
+
+    case SYS_NVFS_RMDIR:
+        regs->eax = (unsigned int)nvfs_rmdir((const char *)regs->ebx);
+        return (unsigned int)regs;
+
+    case SYS_NVFS_CHDIR:
+        regs->eax = (unsigned int)nvfs_chdir((const char *)regs->ebx,
+                                             (unsigned *)regs->ecx);
+        return (unsigned int)regs;
+
+    case SYS_NVFS_GET_CWD:
+        regs->eax = nvfs_get_cwd();
+        return (unsigned int)regs;
+
+    case SYS_NVFS_LIST:
+        regs->eax = (unsigned int)nvfs_list((const char *)regs->ebx);
+        return (unsigned int)regs;
+
+    case SYS_NVFS_STRERROR:
+        regs->eax = (unsigned int)nvfs_strerror((int)regs->ebx);
+        return (unsigned int)regs;
+
+    case SYS_NVFS_IS_MOUNTED:
+        regs->eax = nvfs_is_mounted() ? 1 : 0;
+        return (unsigned int)regs;
+
     default:
-        break;
+        serial_write_string("[elf] unknown syscall: ");
+        serial_write_hex(num);
+        serial_write_string("\n");
+        regs->eax = (unsigned int)-1;
+        return (unsigned int)regs;
     }
-    return 0;
 }
 
 int elf_exec(const char *path)
@@ -261,7 +298,6 @@ int elf_exec(const char *path)
         return -1;
     }
 
-    /* ── Issue 1 & 2: validate segment bounds before allocating anything ── */
     unsigned char *ph_table = elf_load_buf + ehdr->e_phoff;
     for (int i = 0; i < ehdr->e_phnum; i++) {
         elf32_phdr_t *phdr = (elf32_phdr_t *)(ph_table + i * ehdr->e_phentsize);
@@ -278,31 +314,26 @@ int elf_exec(const char *path)
             return -1;
         }
 
-        /* Check p_offset + p_filesz overflow and file bounds */
         if (phdr->p_offset + phdr->p_filesz < phdr->p_offset ||
             phdr->p_offset + phdr->p_filesz > (unsigned int)size) {
             print_string("Error: ELF segment extends past file\n");
             return -1;
         }
 
-        /* Check p_filesz <= p_memsz to prevent memset underflow */
         if (phdr->p_filesz > phdr->p_memsz) {
             print_string("Error: p_filesz > p_memsz\n");
             return -1;
         }
     }
 
-    /* ── Issue 3: per-process page directory ── */
     page_dir_t pd = page_dir_create();
     if (!pd) {
         print_string("Error: Failed to allocate page directory\n");
         return -1;
     }
 
-    /* Clear user PDE so map_page_to_dir allocates new page tables */
     pd[USER_PDE_IDX] = 0;
 
-    /* Allocate physical frames for user pages, map in task's PD only */
     for (unsigned int addr = USER_ELF_BASE; addr < USER_STACK_TOP; addr += 0x1000) {
         unsigned int phys = (unsigned int)alloc_frame();
         if (!phys) {
@@ -319,10 +350,8 @@ int elf_exec(const char *path)
         }
     }
 
-    /* Switch to task's page dir to load data */
     page_dir_switch(pd);
 
-    /* Load ELF segments */
     for (int i = 0; i < ehdr->e_phnum; i++) {
         elf32_phdr_t *phdr = (elf32_phdr_t *)(ph_table + i * ehdr->e_phentsize);
 
@@ -365,27 +394,19 @@ int elf_exec(const char *path)
         }
     }
 
-    /* Copy API struct to user-accessible memory */
-    noverix_api_t *user_api = (noverix_api_t *)USER_API_ADDR;
-    lib_memcpy(user_api, &kernel_api, sizeof(noverix_api_t));
-
-    /* Exit trampoline at USER_EXIT_TRAMP: mov $SYS_EXIT, %eax; int $0x80 */
+    /* Exit trampoline: mov $0, %eax; int $0x80 */
     {
         unsigned char *t = (unsigned char *)USER_EXIT_TRAMP;
-        t[0] = 0xB8; t[1] = SYS_EXIT; t[2] = 0; t[3] = 0; t[4] = 0;
+        t[0] = 0xB8; t[1] = 0; t[2] = 0; t[3] = 0; t[4] = 0;
         t[5] = 0xCD; t[6] = 0x80;
     }
 
-    /* No trampoline needed — user app sets segments in inline asm at main() entry.
-       Set up user stack with return address and api pointer for main(). */
+    /* Set up user stack with return address to exit trampoline */
     unsigned int *usp = (unsigned int *)USER_STACK_TOP;
-    *--usp = (unsigned int)USER_API_ADDR;  /* main's argument */
-    *--usp = (unsigned int)USER_EXIT_TRAMP; /* return address */
+    *--usp = (unsigned int)USER_EXIT_TRAMP; /* return address if main() returns */
 
-    /* Switch back to kernel page directory */
     page_dir_switch(kernel_page_dir);
 
-    /* Create user task */
     task_t *t = alloc_task();
     if (!t) {
         print_string("Error: Failed to allocate task\n");
@@ -402,24 +423,22 @@ int elf_exec(const char *path)
 
     unsigned int *sp = (unsigned int *)((unsigned int)stack + TASK_STACK_SIZE);
 
-    /* Ring 3 IRET frame (same layout as interrupt from ring 3) */
-    *--sp = 0x23;                      /* user SS (GDT_UDATA | RPL3) */
-    *--sp = (unsigned int)usp;         /* user ESP                    */
-    *--sp = 0x202;                     /* user EFLAGS (IF=1)          */
-    *--sp = 0x1B;                      /* user CS (GDT_UCODE | RPL3)  */
-    *--sp = ehdr->e_entry;             /* user EIP -> ELF entry point (main) */
-    *--sp = 0;                         /* err_code (skipped)       */
-    *--sp = 0;                         /* int_no (skipped)         */
-    *--sp = 0; *--sp = 0; *--sp = 0; *--sp = 0;  /* pusha: EAX, ECX, EDX, EBX */
-    *--sp = 0; *--sp = 0; *--sp = 0; *--sp = 0;  /* pusha: ESP, EBP, ESI, EDI */
-    *--sp = 0x23; *--sp = 0x23; *--sp = 0x23; *--sp = 0x23; /* DS, ES, FS, GS */
+    *--sp = 0x23;                      /* user SS */
+    *--sp = (unsigned int)usp;         /* user ESP */
+    *--sp = 0x202;                     /* user EFLAGS (IF=1) */
+    *--sp = 0x1B;                      /* user CS */
+    *--sp = ehdr->e_entry;             /* user EIP */
+    *--sp = 0;                         /* err_code */
+    *--sp = 0;                         /* int_no */
+    *--sp = 0; *--sp = 0; *--sp = 0; *--sp = 0;
+    *--sp = 0; *--sp = 0; *--sp = 0; *--sp = 0;
+    *--sp = 0x23; *--sp = 0x23; *--sp = 0x23; *--sp = 0x23;
 
     t->kernel_esp = (unsigned int)sp;
 
     t->page_dir = pd;
     t->state = TASK_READY;
 
-    /* Add to ready list */
     spinlock_lock(&sched_lock);
     if (!ready_head) {
         ready_head = t;
@@ -432,8 +451,6 @@ int elf_exec(const char *path)
 
     serial_write_string("[elf] User task created. Entry=");
     serial_write_hex(ehdr->e_entry);
-    serial_write_string(", Tramp=");
-    serial_write_hex(USER_ENTRY_TRAMP);
     serial_write_string("\n");
 
     print_string("User task started. PID: ");
