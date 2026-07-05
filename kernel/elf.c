@@ -19,6 +19,7 @@
 #define USER_API_ADDR      0x009FF000
 #define USER_ENTRY_TRAMP   0x009FFC00
 #define USER_EXIT_TRAMP    0x009FFE00
+#define USER_PDE_IDX       2  /* 0x800000 >> 22 */
 
 #define SYS_EXIT 0
 
@@ -116,9 +117,23 @@ static unsigned char elf_load_buf[128 * 1024];
 static void free_task_resources(task_t *t)
 {
     if (t->page_dir && t->page_dir != kernel_page_dir) {
+        /* Free per-process page tables and their physical pages */
+        for (int i = 0; i < 1024; i++) {
+            if (t->page_dir[i] == kernel_page_dir[i])
+                continue;
+            if (t->page_dir[i] & PAGE_PRESENT) {
+                page_table_entry_t *pt = (page_table_entry_t *)(t->page_dir[i] & 0xFFFFF000);
+                for (int j = 0; j < 1024; j++) {
+                    if (pt[j] & PAGE_PRESENT)
+                        free_frame((void *)(pt[j] & 0xFFFFF000));
+                }
+                free_frame((void *)pt);
+            }
+        }
         free_frame((void *)t->page_dir);
         t->page_dir = kernel_page_dir;
     }
+
     if (t->kernel_stack_base) {
         free_frames(t->kernel_stack_base, TASK_STACK_SIZE >> 12);
         t->kernel_stack_base = 0;
@@ -247,16 +262,68 @@ int elf_exec(const char *path)
         return -1;
     }
 
-    /* Map user memory region (8MB-10MB) with PAGE_USER */
-    for (unsigned int addr = USER_ELF_BASE; addr < USER_STACK_TOP; addr += 0x1000) {
-        if (map_page(addr, addr, PAGE_WRITE | PAGE_USER) != 0) {
-            print_string("Error: Failed to map user memory\n");
+    /* ── Issue 1 & 2: validate segment bounds before allocating anything ── */
+    unsigned char *ph_table = elf_load_buf + ehdr->e_phoff;
+    for (int i = 0; i < ehdr->e_phnum; i++) {
+        elf32_phdr_t *phdr = (elf32_phdr_t *)(ph_table + i * ehdr->e_phentsize);
+        if (phdr->p_type != PT_LOAD)
+            continue;
+
+        if (phdr->p_vaddr < USER_ELF_BASE || phdr->p_vaddr >= USER_ELF_LIMIT) {
+            print_string("Error: Invalid ELF load address\n");
+            return -1;
+        }
+
+        if (phdr->p_vaddr + phdr->p_memsz > USER_STACK_TOP) {
+            print_string("Error: ELF segment extends past user range\n");
+            return -1;
+        }
+
+        /* Check p_offset + p_filesz overflow and file bounds */
+        if (phdr->p_offset + phdr->p_filesz < phdr->p_offset ||
+            phdr->p_offset + phdr->p_filesz > (unsigned int)size) {
+            print_string("Error: ELF segment extends past file\n");
+            return -1;
+        }
+
+        /* Check p_filesz <= p_memsz to prevent memset underflow */
+        if (phdr->p_filesz > phdr->p_memsz) {
+            print_string("Error: p_filesz > p_memsz\n");
             return -1;
         }
     }
 
+    /* ── Issue 3: per-process page directory ── */
+    page_dir_t pd = page_dir_create();
+    if (!pd) {
+        print_string("Error: Failed to allocate page directory\n");
+        return -1;
+    }
+
+    /* Clear user PDE so map_page_to_dir allocates new page tables */
+    pd[USER_PDE_IDX] = 0;
+
+    /* Allocate physical frames for user pages, map in task's PD only */
+    for (unsigned int addr = USER_ELF_BASE; addr < USER_STACK_TOP; addr += 0x1000) {
+        unsigned int phys = (unsigned int)alloc_frame();
+        if (!phys) {
+            print_string("Error: Out of memory for user pages\n");
+            free_frame((void *)pd);
+            pd[USER_PDE_IDX] = 0;
+            return -1;
+        }
+        if (map_page_to_dir(pd, addr, phys, PAGE_WRITE | PAGE_USER) != 0) {
+            print_string("Error: Failed to map user page\n");
+            free_frame((void *)pd);
+            pd[USER_PDE_IDX] = 0;
+            return -1;
+        }
+    }
+
+    /* Switch to task's page dir to load data */
+    page_dir_switch(pd);
+
     /* Load ELF segments */
-    unsigned char *ph_table = elf_load_buf + ehdr->e_phoff;
     for (int i = 0; i < ehdr->e_phnum; i++) {
         elf32_phdr_t *phdr = (elf32_phdr_t *)(ph_table + i * ehdr->e_phentsize);
 
@@ -277,16 +344,6 @@ int elf_exec(const char *path)
             serial_write_string(", MemSize: ");
             serial_write_int(phdr->p_memsz);
             serial_write_string("\n");
-
-            if (phdr->p_vaddr < USER_ELF_BASE || phdr->p_vaddr >= USER_ELF_LIMIT) {
-                print_string("Error: Invalid ELF load address\n");
-                return -1;
-            }
-
-            if (phdr->p_vaddr + phdr->p_memsz > USER_STACK_TOP) {
-                print_string("Error: ELF segment extends past user range\n");
-                return -1;
-            }
 
             unsigned char *dest = (unsigned char *)phdr->p_vaddr;
             unsigned char *src = elf_load_buf + phdr->p_offset;
@@ -323,8 +380,11 @@ int elf_exec(const char *path)
     /* No trampoline needed — user app sets segments in inline asm at main() entry.
        Set up user stack with return address and api pointer for main(). */
     unsigned int *usp = (unsigned int *)USER_STACK_TOP;
-    *--usp = (unsigned int)user_api;       /* main's argument */
+    *--usp = (unsigned int)USER_API_ADDR;  /* main's argument */
     *--usp = (unsigned int)USER_EXIT_TRAMP; /* return address */
+
+    /* Switch back to kernel page directory */
+    page_dir_switch(kernel_page_dir);
 
     /* Create user task */
     task_t *t = alloc_task();
@@ -357,7 +417,7 @@ int elf_exec(const char *path)
 
     t->kernel_esp = (unsigned int)sp;
 
-    t->page_dir = kernel_page_dir;
+    t->page_dir = pd;
     t->state = TASK_READY;
 
     /* Add to ready list */
