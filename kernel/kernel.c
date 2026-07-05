@@ -944,10 +944,7 @@ void kernel_main(void)
     /* Create the shell task (READY, added to scheduler's ready list) */
     task_create(shell_main);
 
-    /* Switch to idle task's stack and start it via IRET.
-     * This ensures the idle task runs on its own allocated stack,
-     * preventing stack sharing when SMP task migration occurs.
-     * Interrupts must be disabled during the switch; iret re-enables them. */
+    /* Switch to idle task's stack and start it via IRET */
     __asm__ volatile(
         "cli\n"
         "mov %0, %%esp\n"

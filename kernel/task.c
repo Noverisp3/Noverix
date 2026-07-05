@@ -86,14 +86,14 @@ static task_t *pick_next_locked(void)
     task_t *t = curr->next;
 
     while (t != start) {
-        if (t->state == TASK_READY && t->cpu_assigned < 0 &&
+        if (t->state == TASK_READY && (t->cpu_assigned < 0 || t->cpu_assigned == cpu) &&
             t->kernel_esp != 0)
             return t;
         t = t->next;
     }
 
     /* Check current task as last resort */
-    if (start->state == TASK_READY && start->cpu_assigned < 0 &&
+    if (start->state == TASK_READY && (start->cpu_assigned < 0 || start->cpu_assigned == cpu) &&
         start->kernel_esp != 0)
         return start;
 
@@ -121,10 +121,10 @@ static unsigned int task_switch_from(unsigned int current_esp,
 
     if (new_state == TASK_READY) {
         curr->state = TASK_READY;
-        curr->cpu_assigned = -1;
+        curr->cpu_assigned = cpu;  /* Keep on this CPU to prevent migration */
     } else {
         curr->state = new_state;
-        curr->cpu_assigned = -1;
+        curr->cpu_assigned = cpu;
     }
 
     task_t *next = pick_next_locked();
