@@ -95,6 +95,7 @@ noverix.img: $(BUILD_DIR)/os-image.bin nvfs_disk.img
 	cp $(BUILD_DIR)/os-image.bin $@
 	cat nvfs_disk.img >> $@
 	@echo "Created $@ — dd to USB: sudo dd if=$@ of=/dev/sdX bs=512"
+	@echo "NOTE: For VMware, use 'make run-qemu-iso' (ISO + NVFS disk) instead of noverix.img"
 
 run-qemu: $(BUILD_DIR)/os-image.bin nvfs_disk.img
 	qemu-system-x86_64 -vga std -boot order=a -drive format=raw,file=$<,if=floppy -drive file=nvfs_disk.img,format=raw,if=none,id=ata0 -device ide-hd,drive=ata0 -m 128 -smp 2 -serial mon:stdio
