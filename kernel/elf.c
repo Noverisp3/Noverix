@@ -448,6 +448,19 @@ int elf_exec(const char *path)
 
     t->kernel_esp = (unsigned int)sp;
 
+    {
+        unsigned int *fp = (unsigned int *)t->kernel_esp;
+        serial_write_string("[elf] task kernel_esp=");
+        serial_write_hex(t->kernel_esp);
+        serial_write_string(" base=");
+        serial_write_hex((unsigned int)stack);
+        serial_write_string(" entry=");
+        serial_write_hex(ehdr->e_entry);
+        serial_write_string(" frame_eip=");
+        serial_write_hex(fp[14]);
+        serial_write_string("\n");
+    }
+
     t->page_dir = pd;
     t->state = TASK_READY;
 

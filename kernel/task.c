@@ -5,6 +5,7 @@
 #include "cpu/gdt.h"
 #include "cpu/timer.h"
 #include "scheduler/scheduler.h"
+#include "drivers/serial.h"
 #include "lib.h"
 
 spinlock_t sched_lock;
@@ -151,6 +152,17 @@ static unsigned int task_switch_from(unsigned int current_esp,
 
     gdt_set_kernel_stack(cpu, (unsigned int)next->kernel_stack_base + TASK_STACK_SIZE);
     page_dir_switch(next->page_dir);
+
+    {
+        unsigned int *frame = (unsigned int *)next->kernel_esp;
+        serial_write_string("[sched] -> pid=");
+        serial_write_int(next->pid);
+        serial_write_string(" esp=");
+        serial_write_hex(next->kernel_esp);
+        serial_write_string(" eip=");
+        serial_write_hex(frame[14]);
+        serial_write_string("\n");
+    }
 
     return next->kernel_esp;
 }
