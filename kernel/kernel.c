@@ -946,8 +946,10 @@ void kernel_main(void)
 
     /* Switch to idle task's stack and start it via IRET.
      * This ensures the idle task runs on its own allocated stack,
-     * preventing stack sharing when SMP task migration occurs. */
+     * preventing stack sharing when SMP task migration occurs.
+     * Interrupts must be disabled during the switch; iret re-enables them. */
     __asm__ volatile(
+        "cli\n"
         "mov %0, %%esp\n"
         "popl %%gs\n"
         "popl %%fs\n"

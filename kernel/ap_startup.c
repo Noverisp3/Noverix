@@ -76,6 +76,7 @@ void ap_main(unsigned int apic_id)
      * This ensures the idle task runs on its own allocated stack,
      * preventing stack sharing when SMP task migration occurs. */
     __asm__ volatile(
+        "cli\n"
         "mov %0, %%esp\n"
         "popl %%gs\n"
         "popl %%fs\n"
