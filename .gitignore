@@ -37,3 +37,5 @@ bochsout.txt
 # User-specific
 command.txt
 report.md
+compile_commands.json
+.vscode/
