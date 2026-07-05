@@ -146,8 +146,7 @@ unsigned int task_switch_tick(unsigned int current_esp)
 
     gdt_set_kernel_stack(cpu, (unsigned int)next->kernel_stack_base + TASK_STACK_SIZE);
 
-    if (next->page_dir != kernel_page_dir)
-        page_dir_switch(next->page_dir);
+    page_dir_switch(next->page_dir);
 
     /* Debug: check the EIP in the new task's frame */
     {
