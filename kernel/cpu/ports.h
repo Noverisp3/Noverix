@@ -25,4 +25,16 @@ static inline void outw(unsigned short port, unsigned short data)
     __asm__ volatile ("outw %0, %1" : : "a" (data), "Nd" (port));
 }
 
+static inline unsigned int inl(unsigned short port)
+{
+    unsigned int result;
+    __asm__ volatile ("inl %1, %0" : "=a" (result) : "Nd" (port));
+    return result;
+}
+
+static inline void outl(unsigned short port, unsigned int data)
+{
+    __asm__ volatile ("outl %0, %1" : : "a" (data), "Nd" (port));
+}
+
 #endif

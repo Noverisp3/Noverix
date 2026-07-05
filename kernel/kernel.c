@@ -24,6 +24,8 @@
 #include "sync/tlb.h"
 #include "task.h"
 
+#include "net/net.h"
+
 #define VBE_INFO_ADDR ((volatile unsigned int *)0x1000)
 
 #define debug_log(msg) serial_write_string("[kernel] "); serial_write_string(msg); serial_write_char('\n')
@@ -244,6 +246,7 @@ static void execute_cmd(const char *cmd, char *arg)
         print_string("cpus     Show CPU info\n");
         print_string("ps       List running tasks\n");
         print_string("kill     Kill a task by PID: kill <pid>\n");
+        print_string("ping     Ping an IP address: ping <ip>\n");
     } else if (lib_strcmp(cmd, "echo") == 0) {
         int is_append = 0;
         char *redir = arg;
@@ -533,6 +536,20 @@ static void execute_cmd(const char *cmd, char *arg)
                 print_string("Cannot kill running task.\n");
             else
                 print_string("No such task.\n");
+        }
+    } else if (lib_strcmp(cmd, "ping") == 0) {
+        if (!arg[0]) {
+            print_string("Usage: ping <ip>\n");
+        } else {
+            uint32_t ip = net_ip_aton(arg);
+            print_string("Pinging "); print_string(arg); print_string("...\n");
+            int rtt = 0;
+            int ret = net_ping(ip, 2000, &rtt);
+            if (ret == 0) {
+                print_string("Reply: time="); print_int(rtt); print_string("ms\n");
+            } else {
+                print_string("Request timed out.\n");
+            }
         }
     } else if (cmd[0]) {
         print_string("Unknown command: ");
@@ -913,6 +930,9 @@ void kernel_main(void)
 
     debug_log("kernel_main started");
 
+    /* Initialize networking */
+    net_init();
+
     int cpu = get_cpu_id();
 
     /* Create BSP idle task so the scheduler has a task to context-switch from */
@@ -927,7 +947,7 @@ void kernel_main(void)
     /* Idle loop — timer handler will context-switch between idle and shell */
     for (;;) {
         if (!scheduler_step())
-            __asm__ volatile ("pause");
+            __asm__ volatile ("hlt");
     }
 }
 

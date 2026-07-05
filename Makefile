@@ -9,7 +9,7 @@ BUILD_DIR=build
 
 STAGE2_SECTORS=16
 
-SOURCE_DIRS=kernel kernel/drivers kernel/cpu kernel/memory kernel/acpi kernel/apic kernel/scheduler kernel/sync
+SOURCE_DIRS=kernel kernel/drivers kernel/cpu kernel/memory kernel/acpi kernel/apic kernel/scheduler kernel/sync kernel/net
 vpath %.c $(SOURCE_DIRS)
 vpath %.S $(SOURCE_DIRS)
 
@@ -39,7 +39,10 @@ KERNEL_OBJS = \
 	$(BUILD_DIR)/ap_trampoline.o \
 	$(BUILD_DIR)/scheduler.o \
 	$(BUILD_DIR)/tlb.o \
-	$(BUILD_DIR)/task.o
+	$(BUILD_DIR)/task.o \
+	$(BUILD_DIR)/pci.o \
+	$(BUILD_DIR)/rtl8139.o \
+	$(BUILD_DIR)/net.o
 
 .PHONY: all clean run run-qemu iso
 
@@ -109,17 +112,20 @@ run-qemu: $(BUILD_DIR)/os-image.bin nvfs_disk.img
 	  -device ide-hd,drive=boot,bus=ide.0,unit=0 \
 	  -drive file=nvfs_disk.img,format=raw,if=none,id=nvfs \
 	  -device ide-hd,drive=nvfs,bus=ide.0,unit=1 \
+	  -nic user,model=rtl8139 \
 	  -m 128 -smp 2 -serial mon:stdio
 
 run-qemu-iso: $(BUILD_DIR)/os-image.iso nvfs_disk.img
 	qemu-system-x86_64 -vga std -display gtk -boot order=d -cdrom $(BUILD_DIR)/os-image.iso \
 	  -drive file=nvfs_disk.img,format=raw,if=none,id=nvfs \
-	  -device ide-hd,drive=nvfs -smp 2 -m 128
+	  -device ide-hd,drive=nvfs -smp 2 -m 128 \
+	  -nic user,model=rtl8139
 
 run-qemu-nrx: noverix.img
 	qemu-system-x86_64 -vga std -display gtk -smp 2 -boot order=c \
 	  -drive file=noverix.img,format=raw,if=none,id=boot \
-	  -device ide-hd,drive=boot -m 128 -serial mon:stdio
+	  -device ide-hd,drive=boot -m 128 -serial mon:stdio \
+	  -nic user,model=rtl8139
 
 run: $(BUILD_DIR)/os-image.bin
 	bochs -q -f bochsrc.bxrc
