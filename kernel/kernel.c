@@ -83,6 +83,7 @@ static char read_char_any(void)
             if (c == '\r') c = '\n';
             return c;
         }
+        __asm__ volatile ("hlt");
     }
 }
 
