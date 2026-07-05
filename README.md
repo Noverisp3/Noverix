@@ -25,6 +25,9 @@ A minimal x86 hobby operating system built from scratch. Boots from real mode in
 | **APIC** | LAPIC enabled via MSR 0x1B, mapped at 0xFEE00000. I/O APIC at 0xFEC00000 routes IRQ0/IRQ1. IPI (INIT+SIPI) for AP startup. Spurious vector 0xFF. LINT0 ExtINT mode for legacy PIC passthrough. |
 | **SMP** | Per-CPU GDT (7 entries: null, code, data, ucode, udata, TSS, percpu) with `%gs` base for `get_cpu_id()`. AP trampoline at 0x70000. INIT+SIPI protocol. APs enter idle loop with `pause`. Up to 8 CPUs. |
 | **Scheduler** | Pull-based SMP work queue: `scheduler_submit()`/`scheduler_step()`/`scheduler_wait_all()`. State machine (free→submitted→running→free). Tasks execute on any idle CPU. `smp` shell command for parallel testing. |
+| **PCI** | PCI bus scan: config space read/write via I/O ports 0xCF8/0xCFC, vendor/device/class discovery, BAR parsing for memory and I/O regions. |
+| **RTL8139 NIC** | Polling-mode RTL8139 driver: PCI probe, MAC address read, TX descriptors with round-robin selection, RX ring buffer with CAPR-0x10 compensation for QEMU compatibility. Chipset bit definitions from Linux `8139too.c`. |
+| **Network stack** | Ethernet/ARP/IP/ICMP: ARP cache (request/reply, subnet matching), ICMP echo (ping) with checksum, polling TX/RX via `net_tick()`, subnet check (`netmask & dst_ip == netmask & src_ip`). |
 | **ELF loader** | Loads and executes ELF binaries from NVFS into user-space, basic syscall interface via software interrupt. |
 | **Ring-3 user mode** | User tasks run at CPL=3 via IRET with correct segment selectors (CS=0x1B, SS=0x23, DS/ES/FS/GS=0x23). Kernel API exposed via function pointer table (clear_screen, print_string, draw_pixel, malloc/free, NVFS, etc.). User-safe wrappers use `spinlock_lock` (no `cli`) to avoid GPF. Timer-driven preemptive scheduler switches between kernel (PID 1) and user tasks. |
 | **Shell** | Command history (UP/DOWN), inline editing (LEFT/RIGHT/Backspace), Ctrl+C to cancel line, path navigation with `cd`, `cd ..`, `cd ./..`, `ls <path>`, `cat`, `echo > file`, `echo >> file` (append), `|` pipe (e.g. `cmd1 | cmd2`), `exec` for running ELF executables, `mkdir`, `rmdir`, `rm`, `heap`/`mem`/`pages` debug commands, `smp`/`cpus` SMP diagnostics. Specific error messages (e.g. "Not found", "Directory not empty") instead of generic "FAIL". Dynamic prompt shows current directory path (e.g. `/MYDIR$`). |
@@ -130,6 +133,8 @@ ata      List ATA drives
 crash    Trigger a crash (for testing)
 reboot   Reboot system
 shutdown Power off
+exec     Load and run ELF executable (exec triangle.elf)
+ping     Send ICMP echo request (ping 10.0.2.2)
 ```
 
 ### Commands reference
@@ -156,6 +161,7 @@ shutdown Power off
 | `reboot` | `reboot` | Reset system via keyboard controller (port 0x64, 0xFE) |
 | `shutdown`, `poweroff` | `shutdown` | Power off via ACPI ports (0xB004, 0x604) |
 | `exec` | `exec <file>` | Load and run an ELF executable from NVFS |
+| `ping` | `ping <ip>` | Send ICMP echo request to IP address (e.g. `ping 10.0.2.2`) |
 | `heap` | `heap` | Dump heap allocator block state |
 | `mem` | `mem` | Show physical memory usage (total/used/free frames) |
 | `pages`    | `pages`    | Show page directory/table mappings |
@@ -197,7 +203,11 @@ shutdown Power off
 │   │   ├── pfa.c / pfa.h       # Page Frame Allocator (bitmap, 32MB)
 │   │   ├── paging.c / paging.h # Paging (PD/PT, identity map, CR0.PG)
 │   │   ├── heap.c / heap.h     # Heap allocator (malloc/free, boundary tags)
+│   ├── net/
+│   │   ├── net.c / net.h       # Network stack: Ethernet, ARP, IP, ICMP, ping, polling TX/RX
 │   └── drivers/
+│       ├── pci.c / pci.h             # PCI bus probe (config space, BAR parsing)
+│       ├── rtl8139.c / rtl8139.h     # RTL8139 NIC driver (polling TX/RX, CAPR compensation)
 │       ├── ata.c / ata.h             # ATA PIO driver (LBA28, IDENTIFY)
 │       ├── nvfs.c / nvfs.h            # NVFS extent-based filesystem driver
 │       ├── keyboard.c / keyboard.h    # PS/2 keyboard driver
@@ -286,7 +296,10 @@ _start → kernel_main
   ├── nvfs_mount() — mount NVFS volume
   ├── start_aps() — INIT+SIPI → APs boot, load per-CPU GDT, enter idle
   ├── scheduler_init() — init SMP work queue
-  └── Shell loop
+  ├── pci_init() — scan PCI bus for devices
+  ├── rtl8139_init() — probe and init RTL8139 NIC
+  ├── net_init() — init network stack (IP, MAC, ARP cache)
+  └── Shell loop (calls net_tick() each iteration for polling RX)
 ```
 
 ## Key notes
@@ -309,3 +322,6 @@ _start → kernel_main
 - **SMP scheduler** — pull-based work queue (not preemptive). BSP submits tasks via `scheduler_submit()`, idle CPUs pick them via `scheduler_step()`. AP idle loop uses `pause` (not `hlt`) because I/O APIC only delivers IRQ0/IRQ1 to CPU 0.
 - **Ring-3 user mode** — ELF loader creates ring-3 tasks via IRET with correct segment selectors. Kernel API (screen, keyboard, heap, NVFS, graphics) exposed via function pointer table. User-safe API wrappers use **no locks** — at CPL=3, IF=1 means a timer ISR can preempt while a lock is held, leading to deadlock when another task tries the same lock via `spinlock_lock_irqsave` (CLI + spin). Instead, per-pixel framebuffer writes and cursor_x/y access are lock-free (best-effort accuracy acceptable). Keyboard ISR uses `spinlock_try_lock` to avoid deadlock with user-held `kb_lock`. VBE framebuffer mapped with `PAGE_USER`. Timer-driven preemptive round-robin scheduler switches between shell (PID 1) and user tasks (PID 2+). Per-process page directories isolate each user task's address space (0x800000–0xA00000).
 - **Multi-stage boot** — Stage 1 (512B MBR) loads Stage 2 from LBA 1-16 via LBA/CHS. Stage 2 (up to 8KB at 0x7E00) reads kernel from LBA 17+ (KERNEL_LBA = 1 + STAGE2_SECTORS), probes RAM via E801, sets VBE, A20, GDT, and transitions to 32-bit PM. Stage 2 has no 512B size limit — enables verbose debug output and easier maintenance. Boot drive passed from Stage 1 to Stage 2 via fixed memory address 0x7BFF.
+- **PCI driver** — `pci_init()` scans bus 0 for all 32 devices × 8 functions. Config space accessed via I/O ports 0xCF8/0xCFC. BAR0 parsed for memory-mapped or I/O-mapped region. Vendor/device/class info logged to serial.
+- **RTL8139 NIC** — Polling-mode driver initialized by `rtl8139_init()` after PCI probe. Configures RCR (Accept All Packets), sets TxConfig (IFG96 + DMA burst + retry), reads MAC address from PROM. TX uses 4 descriptors with round-robin selection (`tx_next_idx`) to match QEMU's single-descriptor `currTxDesc`. RX uses ring buffer with CAPR compensation (QEMU internally adds 0x10 to CAPR; driver writes `rx_offset - 0x10` to avoid buffer-full deadlock). Bit definitions from Linux `8139too.c`: `TxHostOwns=0x2000`, `TxStatOK=0x8000`, `TxUnderrun=0x4000`, `AAP=0x01`, `AB=0x08`.
+- **Network stack** — `net_init()` configures local IP, netmask, MAC. `net_tick()` (called from shell loop) polls NIC for RX packets, dispatches Ethernet type (ARP/IP), and sends pending TX packets. ARP cache stores resolved MAC/IP pairs. ICMP echo replies are handled automatically. `ping` shell command sends ICMP echo request with subnet check. All IP addresses in C code use host byte order; `net_htonl`/`net_ntohl` only at the hardware boundary. QEMU user-mode networking via `-nic user,model=rtl8139` provides gateway (10.0.2.2) and DNS (10.0.2.3).

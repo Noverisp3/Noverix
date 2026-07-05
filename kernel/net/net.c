@@ -54,7 +54,7 @@ uint32_t net_ip_aton(const char *str)
         str++;
     }
     ip = (ip << 8) | (val & 0xFF);
-    return net_htonl(ip);
+    return ip;
 }
 
 int net_init(void)
@@ -278,11 +278,16 @@ int net_ping(uint32_t dst_ip, int timeout_ms, int *rtt_ms)
 {
     uint8_t gw_mac[6];
 
-    /* Resolve destination MAC via ARP (or use cache) */
-    if (net_arp_resolve(dst_ip, gw_mac) < 0) {
-        /* If it's the gateway, try again — QEMU always responds for gateway */
+    /* Determine target for ARP resolution */
+    uint32_t arp_target = dst_ip;
+    /* If destination is off-subnet, use the gateway */
+    if ((dst_ip & NET_NETMASK) != (NET_HOST_IP & NET_NETMASK))
+        arp_target = NET_GW_IP;
+
+    /* Resolve MAC via ARP */
+    if (net_arp_resolve(arp_target, gw_mac) < 0) {
         serial_write_string("[ping] ARP failed, retrying...\n");
-        if (net_arp_resolve(dst_ip, gw_mac) < 0) {
+        if (net_arp_resolve(arp_target, gw_mac) < 0) {
             serial_write_string("[ping] ARP failed\n");
             return -1;
         }

@@ -2,7 +2,7 @@
 
 ## 1. OVERALL ARCHITECTURE & DATA FLOW
 
-**Model:** Monolithic Kernel — single binary loaded at 0x2000, no user/kernel space separation, bare-metal x86.
+**Model:** Monolithic Kernel — single binary loaded at 0x2000, no user/kernel space separation, bare-metal x86. Includes polling-mode network stack with PCI/RTL8139/ARP/IP/ICMP.
 
 ```
 BIOS
@@ -32,8 +32,11 @@ BIOS
              ├─ kernel/cpu/ap_startup.c → start_aps() → INIT+SIPI → APs boot
               ├─ kernel/task.c → preemptive round-robin task mgr (PID, timer IRQ switch)
               ├─ kernel/scheduler/scheduler.c → init work queue
-              ├─ kernel/elf.c → exec: per-process PD, ring-3 ELF load, preemptive task switch
-              └─ while(1): readline → handle_cmd → dispatch
+               ├─ kernel/elf.c → exec: per-process PD, ring-3 ELF load, preemptive task switch
+               ├─ kernel/drivers/pci.c → PCI bus scan (config space 0xCF8/0xCFC)
+               ├─ kernel/drivers/rtl8139.c → RTL8139 NIC init (polling TX/RX, CAPR compensation)
+               ├─ kernel/net/net.c → net_init(): IP/MAC config, ARP/IP/ICMP, polling RX via net_tick()
+               └─ while(1): readline → handle_cmd → dispatch (calls net_tick() per iteration)
 ```
 
 **Disk data flow:** ATA PIO LBA28 → raw sector buffer → NVFS superblock parse → bitmap/inode management → extent-based data read/write. Write (shadow paging): save old extents → alloc new blocks → write data → inode_write (persist) → free old blocks → update bitmap.
@@ -77,9 +80,13 @@ Project_002_OS/
 │   │   ├── paging.c / paging.h # Paging (PD/PT, identity map, CR0.PG)
 │   │   ├── heap.c / heap.h   # Heap allocator (malloc/free, boundary tags)
 │   ├── elf.c / elf.h         # ELF loader for user-space executables
+│   ├── net/
+│   │   └── net.c / net.h     # Network stack: Ethernet, ARP, IP, ICMP, ping, polling TX/RX
 │   └── drivers/
-│       ├── ata.c / ata.h     # ATA PIO: probe, LBA28 read/write
-│       ├── nvfs.c / nvfs.h   # NVFS: extent-based filesystem driver
+    │       ├── pci.c / pci.h     # PCI bus probe: config space, BAR parsing
+    │       ├── rtl8139.c / rtl8139.h # RTL8139 NIC driver: polling TX/RX, CAPR compensation
+    │       ├── ata.c / ata.h     # ATA PIO: probe, LBA28 read/write
+    │       ├── nvfs.c / nvfs.h   # NVFS: extent-based filesystem driver
 │       ├── keyboard.c / .h     # PS/2 IRQ1: scancode→ASCII, ring buf
 │       ├── screen.c / .h     # VGA text + VBE graphics dispatch
 │       ├── graphics.c / .h   # VBE framebuffer: pixel, rect, char, scroll
@@ -535,6 +542,40 @@ Project_002_OS/
 
 ---
 
+### `kernel/drivers/pci.c` + `kernel/drivers/pci.h`
+
+- **Role:** PCI bus driver — scans bus 0, enumerates devices/functions via config space I/O ports 0xCF8/0xCFC.
+- **Functions:**
+  - `pci_init(void)`: Scan bus 0 (dev 0–31, func 0–7), read vendor/device/class/header-type for each. Log all found devices. Identify RTL8139 by vendor=0x10EC, device=0x8139. Parse BAR0 to determine memory-mapped or I/O-mapped base address. | [pci_config_read]
+  - `pci_config_read(bus, dev, func, offset)`: Write address to 0xCF8 → read result from 0xCFC (32-bit) | [outl, inl]
+  - `pci_config_write(bus, dev, func, offset, val)`: Write address to 0xCF8 → write value to 0xCFC (32-bit) | [outl]
+- **Import:** `ports.h`, `serial.h`
+- **BAR types:** `PCI_BAR_MEM=0`, `PCI_BAR_IO=1` — determined by bit 0 of BAR value.
+- **pci_bsp_addr / pci_bsp_is_io / pci_bsp_bar_phys / pci_bsp_bar_size:** Global variables exported for RTL8139 driver.
+- **Note:** Currently only drives the RTL8139 NIC. Extensible for other devices.
+
+---
+
+### `kernel/drivers/rtl8139.c` + `kernel/drivers/rtl8139.h`
+
+- **Role:** RTL8139 NIC driver — polling-mode TX/RX, PCI-probed, MAC address read, CAPR compensation for QEMU compatibility.
+- **Constants:** Chipset registers from Linux `8139too.c`:
+  - `RTL8139_IDR0=0x00` (MAC address, 6 bytes), `RTL8139_RBSTART=0x30`, `RTL8139_CR=0x37`, `RTL8139_CAPR=0x38`, `RTL8139_IMR=0x3C`, `RTL8139_ISR=0x3E`, `RTL8139_TCR=0x40`, `RTL8139_RCR=0x44`, `RTL8139_TxStatus0=0x10`, `RTL8139_TxAddr0=0x20`, `RTL8139_CMD=0x37`
+  - TX: `TX_HOST_OWNS=0x2000`, `TX_STAT_OK=0x8000`, `TX_UNDERRUN=0x4000`, `TX_DMA_BURST=0x00000600`, `TX_IFG96=0x03000000`, `TX_RETRY=0x000000F0`
+  - RX: `RCR_AAP=0x01` (accept all packets), `RCR_APM=0x02`, `RCR_AM=0x04`, `RCR_AB=0x08`
+  - `RX_BUF_SIZE=8192+16` (QEMU needs 16 extra bytes), `TX_DESC_COUNT=4`, `TX_BUF_SIZE=1536`
+- **Functions:**
+  - `rtl8139_init(void)`: Read PCI BAR0 → map registers via `map_page()` (if MMIO) or I/O ports → reset chip → set RX buffer → configure RCR (accept all) → set TxConfig (IFG96 + DMA burst + retry) → enable RX/TX in CR → read MAC address from IDR0 → init TX descriptors with `TxHostOwns` → clear ISR | [pci_config_read, outb, outl, inb, inl, map_page]
+  - `rtl8139_send_packet(data, len)`: Wait for free TX descriptor (poll `TxHostOwns`) → copy packet to TX buffer → update TxStatus with length → write TxStatus to TSTAT register (triggers TX) → round-robin to next descriptor (`tx_next_idx`) | [outl, lib_memcpy]
+  - `rtl8139_poll_packet(buf, max_len)`: Check RX ring — read packet header → validate (CRC OK, rx OK) → copy packet data → advance `rx_offset` by `(4 + pkt_len + 3) & ~3` → write `rx_offset - 0x10` to CAPR (compensating QEMU's internal +0x10) → return length or 0 | [inb, inw, inl, lib_memcpy, outw]
+  - `rtl8139_get_mac(mac_out)`: Copy stored MAC address | [lib_memcpy]
+- **Static data:** `tx_next_idx` (round-robin descriptor index), `rx_offset` (current position in RX ring), `rx_ring[RX_BUF_SIZE]` (physical RX buffer), `tx_bufs[TX_DESC_COUNT][TX_BUF_SIZE]` (TX descriptor buffers)
+- **Import:** `pci.h`, `ports.h`, `paging.h`, `serial.h`
+- **CAPR compensation:** QEMU internally does `RxBufPtr = CAPR + 0x10`. The driver writes `rx_offset - 0x10` to CAPR so the NIC's read pointer matches actual consumption. Without this, the NIC thinks the buffer is full and `can_receive()` returns FALSE → packets stay queued forever.
+- **Round-robin TX:** QEMU's `rtl8139_transmit()` only processes `currTxDesc`. After first TX, `currTxDesc` advances. If driver always writes descriptor 0, the second TX is silently ignored. Round-robin via `tx_next_idx` matches QEMU's internal progression.
+
+---
+
 ### `kernel/drivers/keyboard.c` + `keyboard.h`
 
 - **Role:** PS/2 keyboard driver. IRQ1 handler reads scancode → ASCII → ring buffer.
@@ -672,6 +713,37 @@ Project_002_OS/
   - `scheduler_wait_all(void)`: Spin (calling scheduler_step to also process tasks) until all submitted tasks are FREE. BSP participates in work execution during wait | [scheduler_step]
 - **Import:** `sync.h`
 - **Usage:** BSP submits tasks, any idle CPU picks them. `smp` shell command submits 4 sum tasks. AP idle loop calls `scheduler_step()` in a `pause` loop.
+
+---
+
+### `kernel/net/net.c` + `kernel/net/net.h`
+
+- **Role:** Network stack — Ethernet, ARP, IPv4, ICMP. Provides `net_init()` and `net_ping()` for the `ping` shell command. Uses the RTL8139 driver for TX/RX.
+- **Constants:** `NET_MAC_LEN=6`, `NET_IP_LEN=4`, `NET_ETH_TYPE_ARP=0x0806`, `NET_ETH_TYPE_IP=0x0800`, `NET_ARP_REQUEST=1`, `NET_ARP_REPLY=2`, `NET_IP_PROTO_ICMP=1`, `NET_ICMP_ECHO_REQUEST=8`, `NET_ICMP_ECHO_REPLY=0`, `NET_NETMASK=0xFFFFFF00` (255.255.255.0).
+- **Structs:**
+  - `net_ether_hdr_t`: {dst_mac[6], src_mac[6], eth_type (uint16)}
+  - `net_arp_pkt_t`: {htype, ptype, hlen, plen, oper, sender_mac[6], sender_ip[4], target_mac[6], target_ip[4]}
+  - `net_ip_hdr_t`: {ver_ihl, tos, total_len, id, flags_frag, ttl, proto, checksum, src_ip, dst_ip}
+  - `net_icmp_hdr_t`: {type, code, checksum, id, seq}
+- **Static data:** `net_ip` (our IP, host byte order, default 10.0.2.15), `net_gateway` (10.0.2.2), `net_arp_table` (simple MAC↔IP cache), `net_our_mac[6]`
+- **Functions:**
+  - `net_init(void)`: PCI bus scan for vendor 0x10EC:0x8139 (Realtek RTL8139) → `rtl8139_init(io_base, mac)` → set `net_our_mac` → store IO base | [pci_scan, rtl8139_init]
+  - `net_ether_send(buf, len)`: Prepend Ethernet header (dst MAC, src MAC, eth_type) → `rtl8139_tx()` | [rtl8139_tx]
+  - `net_arp_request(ip)`: Build ARP request packet → `net_ether_send()` (broadcast) | [net_ether_send]
+  - `net_arp_reply(sender_mac, sender_ip)`: Build ARP reply → `net_ether_send()` | [net_ether_send]
+  - `net_arp_handle(pkt, len)`: Process ARP packet — if request for our IP, send reply; if reply, cache MAC↔IP in `net_arp_table` | [net_arp_reply]
+  - `net_ip_handle(hdr, len)`: Process IP packet — if ICMP echo request, send echo reply | [net_icmp_send_reply]
+  - `net_icmp_send_reply(src_ip, id, seq, data, len)`: Build ICMP echo reply → wrap in IP → `net_ether_send()` | [net_ip_checksum, net_ether_send]
+  - `net_ip_checksum(buf, len)`: 16-bit one's complement sum for IP/ICMP headers | []
+  - `net_htonl(val)` / `net_ntohl(val)`: Byte order conversion at hardware boundary | []
+  - `net_htons(val)` / `net_ntohs(val)`: 16-bit byte order conversion | []
+  - `net_ip_aton(str, out)`: Parse dotted-decimal IP string → host byte order uint32 | []
+  - `net_poll(void)`: Poll RTL8139 RX ring → parse Ethernet header → dispatch to ARP or IP handler → advance CAPR | [rtl8139_rx, net_arp_handle, net_ip_handle, rtl8139_advance_rx]
+  - `net_ping(dest_ip)`: Check subnet → ARP resolve → send ICMP echo request → poll for reply (timeout loop) → print RTT | [net_arp_request, net_poll, net_ether_send]
+- **Import:** `pci.h`, `rtl8139.h`, `serial.h`, `screen.h`, `timer.h`, `lib.h`
+- **Byte order:** All IP addresses stored in host byte order in C code. `net_htonl`/`net_ntohl` applied only at the hardware boundary (packet build/parse).
+- **Polling model:** No network IRQs. `net_poll()` called in a loop by `net_ping()` to drain RX ring. CAPR advanced after each packet via `rtl8139_advance_rx()`.
+- **ARP cache:** Simple linear array of {ip, mac[6]} entries. Populated on ARP reply. Lookup in `net_ping()` before sending ICMP.
 
 ---
 

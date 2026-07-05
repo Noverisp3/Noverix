@@ -19,16 +19,40 @@
 #define RT_RX_CONFIG 0x44   /* RX config (32-bit) */
 #define RT_CONFIG1   0x52   /* CONFIG1 (8-bit) */
 
-/* CR bits */
+#define RT_PHY_CR    0xE0   /* PHY Command/Address (8-bit) */
+#define RT_PHY_DATA  0xE2   /* PHY Data (16-bit) */
+
+/* CR bits (per Linux 8139too) */
 #define CR_RST  0x10
 #define CR_RE   0x08
 #define CR_TE   0x04
 
-/* RX_CONFIG bits */
-#define RCR_AB   (1 << 6)   /* Accept Broadcast */
-#define RCR_AM   (1 << 7)   /* Accept Multicast */
-#define RCR_APM  (1 << 8)   /* Accept Physical Match */
-#define RCR_AAP  (1 << 9)   /* Accept All Packets (promiscuous) */
+/* RX_CONFIG accept bits (per Linux 8139too) */
+#define RCR_AAP 0x01    /* Accept All Phys (promiscuous) */
+#define RCR_APM 0x02    /* Accept Physical Match */
+#define RCR_AM  0x04    /* Accept Multicast */
+#define RCR_AB  0x08    /* Accept Broadcast */
+#define RCR_ERR 0x20    /* Accept Error */
+#define RCR_RUNT 0x10   /* Accept Runt */
+
+/* TX_STATUS bits (per Linux 8139too) */
+#define TX_HOST_OWNS 0x2000    /* Bit 13: Host owns descriptor */
+#define TX_STAT_OK   0x8000    /* Bit 15: TX completed OK */
+#define TX_UNDERRUN  0x4000    /* Bit 14: TX underrun */
+
+/* RX_STATUS bits (per Linux 8139too) */
+#define RX_STAT_OK   0x0001    /* Bit 0: RX OK */
+
+/* TxConfig (per Linux 8139too) */
+#define TX_IFG96     (3 << 24) /* Interframe gap 9.6us */
+#define TX_DMA_BURST (6 << 8)  /* DMA burst */
+#define TX_RETRY     (15 << 4) /* TX retry count */
+
+/* RxConfig buffer length bits (per Linux 8139too) */
+#define RX_CFG_8K   0
+#define RX_CFG_NO_WRAP (1 << 7)
+#define RX_CFG_FIFO_NONE (7 << 13)
+#define RX_CFG_DMA_UNLIM (7 << 8)
 
 #define RX_BUF_SIZE  8192
 #define TX_NUM       4
@@ -41,6 +65,7 @@ static uint8_t *tx_buf_virt[TX_NUM];
 static unsigned int tx_buf_phys[TX_NUM];
 static int rx_offset;
 static int tx_in_use[TX_NUM];
+static int tx_next_idx;  /* Round-robin to match QEMU's currTxDesc */
 
 static void rtl8139_reset(void)
 {
@@ -98,12 +123,11 @@ int rtl8139_init(void)
     }
     serial_write_char('\n');
 
-    /* Allocate RX buffer (2 pages = 8K) */
-    rx_buf = (uint8_t *)alloc_frames(2);
+    /* Allocate RX buffer (3 pages = 12K, enough for 8K+16 mode) */
+    rx_buf = (uint8_t *)alloc_frames(3);
     if (!rx_buf) return -1;
     lib_memset(rx_buf, 0, RX_BUF_SIZE);
     outl(io_base + RT_RBSTART, (unsigned int)rx_buf);
-    rx_offset = 0;
 
     /* Allocate TX buffers (4 pages, one per descriptor) */
     for (int i = 0; i < TX_NUM; i++) {
@@ -112,23 +136,41 @@ int rtl8139_init(void)
         lib_memset(tx_buf_virt[i], 0, TX_BUF_SIZE);
         tx_buf_phys[i] = (unsigned int)tx_buf_virt[i];
         outl(io_base + RT_TX_ADDR + i * 4, tx_buf_phys[i]);
+        /* Mark descriptor as host-owned (bit 13 = TX_HOST_OWNS) */
+        outl(io_base + RT_TX_STATUS + i * 4, TX_HOST_OWNS);
         tx_in_use[i] = 0;
     }
+    tx_next_idx = 0;
 
-    /* Configure RX: accept broadcast + multicast + physical, 8K+16 buffer */
-    outl(io_base + RT_RX_CONFIG, RCR_AB | RCR_AM | RCR_APM | 0x00);
+    /* Configure RX: accept broadcast + physical match, 8K, no wrap, DMA unlimited */
+    outl(io_base + RT_RX_CONFIG, RX_CFG_8K | RX_CFG_NO_WRAP |
+         RX_CFG_FIFO_NONE | RX_CFG_DMA_UNLIM | RCR_AB | RCR_APM);
 
-    /* In 8K+16 mode, first 16 bytes are for early RX, data starts at offset 0x10 */
-    rx_offset = 0x10;
-
-    /* Configure TX: default */
-    outl(io_base + RT_TX_CONFIG, 0x0000);
+    /* Configure TX: IFG=96, DMA burst=6, retry=15 */
+    outl(io_base + RT_TX_CONFIG, TX_IFG96 | TX_DMA_BURST | TX_RETRY);
 
     /* Unmask TOK and ROK interrupts (not used for polling, but set defaults) */
     outw(io_base + RT_IMR, 0x0005);
 
     /* Enable RX and TX */
     outb(io_base + RT_CR, CR_RE | CR_TE);
+
+    /* Verify RX is enabled */
+    uint8_t cr_val = inb(io_base + RT_CR);
+    uint16_t isr_val = inw(io_base + RT_ISR);
+    serial_write_string("[rtl8139] CR=");
+    serial_write_hex(cr_val);
+    serial_write_string(" ISR=");
+    serial_write_hex(isr_val);
+    serial_write_char('\n');
+
+    /* Sync with NIC: read CBR so rx_offset matches hardware state */
+    rx_offset = inw(io_base + RT_CBR);
+    serial_write_string("[rtl8139] CBR=");
+    serial_write_hex(rx_offset);
+    serial_write_string(" RBSTART=");
+    serial_write_hex(inl(io_base + RT_RBSTART));
+    serial_write_char('\n');
 
     serial_write_string("[rtl8139] init OK\n");
     return 0;
@@ -143,15 +185,8 @@ int rtl8139_send(const void *data, uint16_t len)
 {
     if (len < 14 || len > 1514) return -1;
 
-    /* Find a free TX descriptor (fire-and-forget, check if busy) */
-    int idx = -1;
-    for (int i = 0; i < TX_NUM; i++) {
-        if (!tx_in_use[i]) { idx = i; break; }
-    }
-    if (idx < 0) {
-        /* All descriptors appear busy — force descriptor 0 */
-        idx = 0;
-    }
+    /* Use round-robin descriptor to match QEMU's currTxDesc progression */
+    int idx = tx_next_idx;
 
     tx_in_use[idx] = 1;
 
@@ -161,17 +196,30 @@ int rtl8139_send(const void *data, uint16_t len)
     /* Pad to minimum 60 bytes */
     uint16_t tx_len = len < 60 ? 60 : len;
 
-    /* Trigger TX by writing length to TX_STATUS */
+    /* Trigger TX: write length (lower bits) — TxHostOwns (bit 13) cleared = NIC owns */
     outl(io_base + RT_TX_STATUS + idx * 4, tx_len);
 
-    /* Poll for TX completion (TOK bit = 0x01) */
-    for (volatile int timeout = 0; timeout < 500000; timeout++) {
-        if (inl(io_base + RT_TX_STATUS + idx * 4) & 0x01) {
+    /* Poll for TX completion (TX_STAT_OK = bit 15) */
+    uint32_t tx_sts = 0;
+    for (volatile int timeout = 0; timeout < 5000000; timeout++) {
+        tx_sts = inl(io_base + RT_TX_STATUS + idx * 4);
+        if (tx_sts & TX_STAT_OK) {
             tx_in_use[idx] = 0;
+            tx_next_idx = (idx + 1) % TX_NUM;
             return 0;
         }
     }
 
+    /* Print detailed status on timeout */
+    serial_write_string("[tx] TO ");
+    serial_write_hex(tx_sts);
+    serial_write_string(" addr=");
+    serial_write_hex(inl(io_base + RT_TX_ADDR + idx * 4));
+    serial_write_string(" buf[0]=");
+    serial_write_hex(((uint8_t*)tx_buf_virt[idx])[0]);
+    serial_write_string(" buf[1]=");
+    serial_write_hex(((uint8_t*)tx_buf_virt[idx])[1]);
+    serial_write_char('\n');
     tx_in_use[idx] = 0;
     return -2;  /* timeout */
 }
@@ -181,44 +229,63 @@ int rtl8139_recv(uint8_t *buf, uint16_t *len)
     /* Check if new data is available by comparing with CBR */
     uint16_t cbr = inw(io_base + RT_CBR);
 
+    { static int cbr_dbg; if (cbr_dbg < 2 && rx_offset != cbr) {
+        serial_write_string("[rx] cbr=");
+        serial_write_hex(cbr);
+        serial_write_string(" off=");
+        serial_write_hex(rx_offset);
+        serial_write_char('\n');
+        cbr_dbg++;
+    } }
+
     while (rx_offset != cbr) {
         /* Read 4-byte RX header at rx_offset */
         uint16_t status = *(volatile uint16_t *)(rx_buf + rx_offset);
         uint16_t pkt_len = *(volatile uint16_t *)(rx_buf + rx_offset + 2);
 
-        if (!(status & 0x0001)) {
-            /* ROK not set — packet error, skip */
+        /* Debug: print first few RX headers */
+        { static int rx_dbg;
+          if (rx_dbg < 2) {
+              serial_write_string("[rx] off=");
+              serial_write_hex(rx_offset);
+              serial_write_string(" sts=");
+              serial_write_hex(status);
+              serial_write_string(" len=");
+              serial_write_hex(pkt_len);
+              serial_write_char('\n');
+              rx_dbg++;
+          } }
+
+        if (!(status & RX_STAT_OK)) {
             rx_offset = (rx_offset + 4 + pkt_len + 3) & ~3;
             if (rx_offset >= RX_BUF_SIZE) rx_offset -= RX_BUF_SIZE;
             goto update_capr;
         }
 
-        /* Remove CRC from length (4 bytes) */
         uint16_t data_len = pkt_len - 4;
         if (data_len > 1514) data_len = 1514;
 
-        /* Copy packet data (skip 4-byte header) */
-        rx_offset += 4;
-        if (rx_offset + data_len <= RX_BUF_SIZE) {
-            lib_memcpy(buf, rx_buf + rx_offset, data_len);
+        /* Copy from data offset (after 4-byte header) */
+        int data_off = rx_offset + 4;
+        if (data_off + data_len <= RX_BUF_SIZE) {
+            lib_memcpy(buf, rx_buf + data_off, data_len);
             *len = data_len;
-            rx_offset += data_len;
         } else {
-            /* Wrap-around */
-            uint16_t first = RX_BUF_SIZE - rx_offset;
-            lib_memcpy(buf, rx_buf + rx_offset, first);
+            uint16_t first = RX_BUF_SIZE - data_off;
+            lib_memcpy(buf, rx_buf + data_off, first);
             lib_memcpy(buf + first, rx_buf, data_len - first);
-            rx_offset = data_len - first;
+            *len = data_len;
         }
 
-        /* Align to 4-byte boundary for next packet */
-        rx_offset = (rx_offset + 3) & ~3;
+        /* Advance past header + full pkt_len (incl CRC), align to 4 */
+        rx_offset = (rx_offset + 4 + pkt_len + 3) & ~3;
         if (rx_offset >= RX_BUF_SIZE) rx_offset -= RX_BUF_SIZE;
 
 update_capr: ;
-        uint16_t capr_val = rx_offset >= 0x10 ? rx_offset - 0x10 : 0;
-        outw(io_base + RT_CAPR, capr_val);
-        outw(io_base + RT_ISR, 0x0005);  /* Acknowledge ROK+TOK */
+        /* QEMU internally does: RxBufPtr = CAPR + 0x10.
+         * Compensate so NIC's read pointer matches our rx_offset. */
+        outw(io_base + RT_CAPR, rx_offset >= 16 ? rx_offset - 16 : 0);
+        outw(io_base + RT_ISR, 0x0005);
         cbr = inw(io_base + RT_CBR);
 
         return 0;

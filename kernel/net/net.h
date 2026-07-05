@@ -17,6 +17,7 @@
 /* Default QEMU user-mode network config */
 #define NET_GW_IP    ((10 << 24) | (0 << 16) | (2 << 8) | 2)   /* 10.0.2.2 */
 #define NET_HOST_IP  ((10 << 24) | (0 << 16) | (2 << 8) | 15)  /* 10.0.2.15 */
+#define NET_NETMASK  ((255 << 24) | (255 << 16) | (255 << 8) | 0) /* 255.255.255.0 */
 
 #pragma pack(push, 1)
 
