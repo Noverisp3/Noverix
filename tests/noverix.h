@@ -30,6 +30,7 @@
 #define SYS_NVFS_LIST        26
 #define SYS_NVFS_STRERROR    27
 #define SYS_NVFS_IS_MOUNTED  28
+#define SYS_YIELD            29
 
 static inline void sys_exit(void) {
     __asm__ volatile ("int $0x80" : : "a"(SYS_EXIT) : "memory");
@@ -99,6 +100,10 @@ static inline int fb_rows(void) {
 
 static inline void sleep_ms(unsigned int ms) {
     __asm__ volatile ("int $0x80" : : "a"(SYS_SLEEP_MS), "b"(ms) : "memory");
+}
+
+static inline void sys_yield(void) {
+    __asm__ volatile ("int $0x80" : : "a"(SYS_YIELD) : "memory");
 }
 
 static inline unsigned int get_ticks(void) {

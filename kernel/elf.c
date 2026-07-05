@@ -156,9 +156,21 @@ unsigned int syscall_handler(registers_t *regs)
         return (unsigned int)regs;
 
     case SYS_SLEEP_MS:
-        sleep_ms(regs->ebx);
+    {
+        unsigned int ms = regs->ebx;
+        unsigned int wake_ticks = get_ticks() + (ms + 9) / 10;
+        unsigned int new_esp = task_block_and_switch((unsigned int)regs, wake_ticks);
+        return new_esp;
+    }
+
+    case SYS_YIELD:
+    {
+        unsigned int new_esp = task_yield((unsigned int)regs);
+        if (new_esp)
+            return new_esp;
         regs->eax = 0;
         return (unsigned int)regs;
+    }
 
     case SYS_GET_TICKS:
         regs->eax = get_ticks();

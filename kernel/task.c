@@ -5,7 +5,6 @@
 #include "cpu/gdt.h"
 #include "cpu/timer.h"
 #include "scheduler/scheduler.h"
-#include "drivers/serial.h"
 #include "lib.h"
 
 spinlock_t sched_lock;
@@ -101,29 +100,37 @@ static task_t *pick_next_locked(void)
     return 0;
 }
 
-unsigned int task_switch_tick(unsigned int current_esp)
+/*
+ * Internal: release current task, pick next, return its kernel_esp.
+ * If new_state != TASK_READY, the current task is set to new_state
+ * instead of being released for re-scheduling (used for blocking).
+ */
+static unsigned int task_switch_from(unsigned int current_esp,
+                                     int new_state,
+                                     unsigned int wakeup_tick)
 {
     int cpu = get_cpu_id();
     task_t *curr = cpu_info[cpu].current_task;
 
     if (!curr) return 0;
-    if (!task_switch_pending) return 0;
-    task_switch_pending = 0;
 
-    /* Save current context */
     curr->kernel_esp = current_esp;
+    curr->wakeup_tick = wakeup_tick;
 
     spinlock_lock(&sched_lock);
 
-    /* Release current task for re-scheduling */
-    curr->state = TASK_READY;
-    curr->cpu_assigned = -1;
+    if (new_state == TASK_READY) {
+        curr->state = TASK_READY;
+        curr->cpu_assigned = -1;
+    } else {
+        curr->state = new_state;
+        curr->cpu_assigned = -1;
+    }
 
-    /* Find next task */
     task_t *next = pick_next_locked();
 
     if (!next) {
-        /* No runnable task — keep current running */
+        /* No runnable task — re-assign current */
         curr->state = TASK_RUNNING;
         curr->cpu_assigned = cpu;
         spinlock_unlock(&sched_lock);
@@ -131,39 +138,44 @@ unsigned int task_switch_tick(unsigned int current_esp)
     }
 
     if (next == curr) {
-        /* Same task, no switch needed */
         curr->state = TASK_RUNNING;
         curr->cpu_assigned = cpu;
         spinlock_unlock(&sched_lock);
         return 0;
     }
 
-    /* Commit to new task */
     next->state = TASK_RUNNING;
     next->cpu_assigned = cpu;
     cpu_info[cpu].current_task = next;
     spinlock_unlock(&sched_lock);
 
     gdt_set_kernel_stack(cpu, (unsigned int)next->kernel_stack_base + TASK_STACK_SIZE);
-
     page_dir_switch(next->page_dir);
 
-    /* Debug: check the EIP in the new task's frame */
-    {
-        unsigned int *frame = (unsigned int *)next->kernel_esp;
-        serial_write_string("[sched] switch to pid=");
-        serial_write_int(next->pid);
-        serial_write_string(" kernel_esp=");
-        serial_write_hex(next->kernel_esp);
-        /* EIP is at offset 56 (14 * 4) from kernel_esp in the register frame */
-        serial_write_string(" EIP=");
-        serial_write_hex(frame[14]);
-        serial_write_string(" CS=");
-        serial_write_hex(frame[15]);
-        serial_write_string("\n");
-    }
-
     return next->kernel_esp;
+}
+
+unsigned int task_block_and_switch(unsigned int current_esp,
+                                   unsigned int wakeup_tick)
+{
+    return task_switch_from(current_esp, TASK_BLOCKED, wakeup_tick);
+}
+
+unsigned int task_yield(unsigned int current_esp)
+{
+    return task_switch_from(current_esp, TASK_READY, 0);
+}
+
+unsigned int task_switch_tick(unsigned int current_esp)
+{
+    int cpu = get_cpu_id();
+    task_t *curr = cpu_info[cpu].current_task;
+
+    if (!curr) return 0;
+    if (!cpu_info[cpu].resched_pending) return 0;
+    cpu_info[cpu].resched_pending = 0;
+
+    return task_switch_from(current_esp, TASK_READY, 0);
 }
 
 void task_idle_loop(void)
@@ -177,9 +189,8 @@ void task_idle_loop(void)
 void task_init(void)
 {
     int cpu = get_cpu_id();
-
     spinlock_init(&sched_lock);
-    ready_head = 0;
     next_pid = 1;
     cpu_info[cpu].current_task = 0;
+    cpu_info[cpu].resched_pending = 0;
 }

@@ -12,8 +12,4 @@ char read_char(void);
 void keyboard_set_typematic(unsigned char param);
 unsigned char keyboard_get_typematic(void);
 
-/* Ring-3-safe wrappers (no cli) */
-char get_char_user(void);
-char read_char_user(void);
-
 #endif

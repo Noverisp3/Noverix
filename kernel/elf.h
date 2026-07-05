@@ -33,6 +33,7 @@
 #define SYS_NVFS_LIST        26
 #define SYS_NVFS_STRERROR    27
 #define SYS_NVFS_IS_MOUNTED  28
+#define SYS_YIELD            29
 
 typedef struct {
     unsigned char e_ident[16];

@@ -718,6 +718,7 @@ void kernel_main(void)
         serial_write_string("[test] APIC done\n");
     }
 
+    task_init();
     start_aps();
     scheduler_init();
 
@@ -870,14 +871,21 @@ void kernel_main(void)
     debug_log("kernel_main started");
 
     int cpu = get_cpu_id();
-    task_init();
-    task_t *t = task_create(shell_main);
-    t->state = TASK_RUNNING;
-    t->cpu_assigned = cpu;
-    cpu_info[cpu].current_task = t;
 
-    shell_main();
-    while (1);
+    /* Create BSP idle task so the scheduler has a task to context-switch from */
+    task_t *idle = task_create(task_idle_loop);
+    idle->state = TASK_RUNNING;
+    idle->cpu_assigned = cpu;
+    cpu_info[cpu].current_task = idle;
+
+    /* Create the shell task (READY, added to scheduler's ready list) */
+    task_create(shell_main);
+
+    /* Idle loop — timer handler will context-switch between idle and shell */
+    for (;;) {
+        if (!scheduler_step())
+            __asm__ volatile ("pause");
+    }
 }
 
 static void shell_main(void)

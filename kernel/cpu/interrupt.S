@@ -75,6 +75,9 @@ IRQ 15 47
 
 ISR_NOERR 255
 
+/* AP reschedule IPI */
+IRQ 0x51 0x51
+
 /* Syscall interrupt (int 0x80) */
 .globl isr128
 isr128:

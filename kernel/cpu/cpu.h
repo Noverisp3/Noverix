@@ -18,6 +18,7 @@ typedef struct {
     cpu_state_t state;
     void *stack_top;
     struct task *current_task;       /* Per-CPU running task */
+    volatile int resched_pending;    /* Per-CPU reschedule flag */
 } cpu_info_t;
 
 extern int cpu_count;

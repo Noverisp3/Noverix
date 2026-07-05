@@ -15,7 +15,6 @@ void heap_walk(void);
 
 /* Ring-3-safe wrappers (no cli) */
 void *malloc_user(unsigned int size);
-void *realloc_user(void *ptr, unsigned int size);
 void free_user(void *ptr);
 
 #endif

@@ -65,6 +65,9 @@ void ap_main(unsigned int apic_id)
     cpu_info[cpu_id].current_task = idle;
     cpu_info[cpu_id].state = CPU_RUNNING;
 
+    /* Initialize LAPIC on this CPU so it can receive I/O APIC interrupts */
+    lapic_init();
+
     serial_write_string("[ap] CPU ");
     serial_write_int(cpu_id);
     serial_write_string(" ready\n");

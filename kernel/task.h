@@ -19,6 +19,7 @@ typedef struct task {
     page_dir_t          page_dir;
     unsigned int        kernel_esp;
     void               *kernel_stack_base;
+    unsigned int        wakeup_tick;     /* 0 = not sleeping, else tick to wake */
     struct task        *next;
 } task_t;
 
@@ -32,6 +33,8 @@ task_t *alloc_task(void);
 void task_init(void);
 task_t *task_create(void (*entry)(void));
 unsigned int task_switch_tick(unsigned int current_esp);
+unsigned int task_block_and_switch(unsigned int current_esp, unsigned int wakeup_tick);
+unsigned int task_yield(unsigned int current_esp);
 void task_idle_loop(void);
 
 #endif

@@ -1,4 +1,5 @@
 #include "ioapic.h"
+#include "lapic.h"
 #include "../cpu/ports.h"
 #include "../drivers/serial.h"
 #include "../memory/paging.h"
@@ -50,11 +51,17 @@ void ioapic_init(void)
     serial_write_int(max_entries + 1);
     serial_write_char('\n');
 
-    /* Route IRQ 0 (PIT) → vector 0x20, unmasked, broadcast to all CPUs */
-    ioapic_set_irq(0, 0xFF, 0x20, 0);
+    /* Route IRQ 0 (PIT) → vector 0x20, unmasked, deliver to BSP only */
+    {
+        unsigned int bsp_apic_id = lapic_read(LAPIC_ID) >> 24;
+        ioapic_set_irq(0, bsp_apic_id, 0x20, 0);
+    }
 
-    /* Route IRQ 1 (keyboard) → vector 0x21, unmasked, broadcast to all CPUs */
-    ioapic_set_irq(1, 0xFF, 0x21, 0);
+    /* Route IRQ 1 (keyboard) → vector 0x21, unmasked, deliver to BSP only */
+    {
+        unsigned int bsp_apic_id = lapic_read(LAPIC_ID) >> 24;
+        ioapic_set_irq(1, bsp_apic_id, 0x21, 0);
+    }
 
     /* Mask all other IRQs */
     for (unsigned int i = 2; i <= max_entries; i++)

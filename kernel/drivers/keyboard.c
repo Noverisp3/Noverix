@@ -124,27 +124,6 @@ char read_char(void)
     return c;
 }
 
-/* Ring-3-safe wrappers (no cli) */
-char get_char_user(void)
-{
-    spinlock_lock(&kb_lock);
-    if (buffer_head == buffer_tail) {
-        spinlock_unlock(&kb_lock);
-        return 0;
-    }
-    char c = key_buffer[buffer_tail];
-    buffer_tail = (buffer_tail + 1) % BUFFER_SIZE;
-    spinlock_unlock(&kb_lock);
-    return c;
-}
-
-char read_char_user(void)
-{
-    char c;
-    while ((c = get_char_user()) == 0);
-    return c;
-}
-
 void init_keyboard(void)
 {
     shift_pressed = 0;
