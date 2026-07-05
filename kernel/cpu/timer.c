@@ -31,18 +31,15 @@ static void timer_handler(registers_t *regs)
 
     /* Wake BLOCKED tasks whose wakeup_tick has elapsed */
     if (cpu == 0 && ready_head) {
-        spinlock_lock(&sched_lock);
         task_t *start = ready_head;
         task_t *t = start;
         do {
-            if (t->state == TASK_BLOCKED && t->wakeup_tick &&
-                tick_count >= t->wakeup_tick) {
-                t->state = TASK_READY;
+            if (t->wakeup_tick && tick_count >= t->wakeup_tick) {
+                atomic_cmpxchg((volatile unsigned int *)&t->state, TASK_BLOCKED, TASK_READY);
                 t->wakeup_tick = 0;
             }
             t = t->next;
         } while (t != start);
-        spinlock_unlock(&sched_lock);
     }
 
     cpu_info[cpu].resched_pending = 1;
