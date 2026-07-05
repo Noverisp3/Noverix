@@ -5,6 +5,11 @@
 #include "../cpu/ports.h"
 #include "../sync/sync.h"
 
+/* Forward declarations for non-locking user helpers */
+static void serial_write_string_user(const char *str);
+static void serial_write_hex_user(unsigned int num);
+static void serial_write_int_user(unsigned int num);
+
 static spinlock_t screen_lock = SPINLOCK_INIT;
 
 #define GFX_FG 0x00C0C0C0
@@ -222,36 +227,37 @@ void print_int(unsigned int num)
 int get_cursor_x(void) { return cursor_x; }
 int get_cursor_y(void) { return cursor_y; }
 
-/* Ring-3-safe wrappers (no cli) */
+/* Ring-3-safe wrappers — NO locks, NO serial output.
+ *
+ * CRITICAL: These run at CPL=3 (user mode).  The caller (ring-3 code) has
+ * IF=1 so a timer ISR can preempt *while* the lock is held.  When the ISR's
+ * task_switch_tick switches to another task that tries to acquire the same
+ * lock via spinlock_lock_irqsave (CLI + spin), we get a deadlock — the new
+ * task spins with CLI forever and the lock-holder never runs again.
+ *
+ * Instead we rely on the fact that per-pixel framebuffer writes and
+ * cursor_x/cursor_y access are safe without synchronisation (best-effort).
+ */
 void clear_screen_user(void)
 {
-    spinlock_lock(&screen_lock);
     clear_screen_impl();
-    spinlock_unlock(&screen_lock);
 }
 
 void set_cursor_user(int x, int y)
 {
-    spinlock_lock(&screen_lock);
     set_cursor_impl(x, y);
-    spinlock_unlock(&screen_lock);
 }
 
 void print_char_user(char c)
 {
-    spinlock_lock(&screen_lock);
     print_char_impl(c);
-    spinlock_unlock(&screen_lock);
 }
 
 void print_string_user(const char *str)
 {
-    spinlock_lock(&screen_lock);
-    if (!capture_mode)
-        serial_write_string(str);
+    serial_write_string_user(str);
     while (*str)
         print_char_impl(*str++);
-    spinlock_unlock(&screen_lock);
 }
 
 void print_hex_user(unsigned int num)
@@ -267,11 +273,9 @@ void print_hex_user(unsigned int num)
         num >>= 4;
     }
     hex[10] = '\0';
-    spinlock_lock(&screen_lock);
-    serial_write_hex(orig);
+    serial_write_hex_user(orig);
     for (char *p = hex; *p; p++)
         print_char_impl(*p);
-    spinlock_unlock(&screen_lock);
 }
 
 void print_int_user(unsigned int num)
@@ -281,10 +285,8 @@ void print_int_user(unsigned int num)
     unsigned int orig = num;
     buf[11] = 0;
     if (num == 0) {
-        spinlock_lock(&screen_lock);
-        serial_write_int(0);
+        serial_write_int_user(0);
         print_char_impl('0');
-        spinlock_unlock(&screen_lock);
         return;
     }
     while (num && i > 0) {
@@ -292,9 +294,68 @@ void print_int_user(unsigned int num)
         buf[i] = '0' + (num % 10);
         num /= 10;
     }
-    spinlock_lock(&screen_lock);
-    serial_write_int(orig);
+    serial_write_int_user(orig);
     for (char *p = buf + i; *p; p++)
         print_char_impl(*p);
-    spinlock_unlock(&screen_lock);
+}
+
+/* Non-locking serial helpers for user wrappers (same lock reasoning applies) */
+#define USER_COM1 0x3F8
+#define user_tx_empty() (inb(USER_COM1 + 5) & 0x20)
+
+static void serial_write_string_user(const char *str)
+{
+    while (*str) {
+        if (*str == '\n') {
+            while (!user_tx_empty())
+                ;
+            outb(USER_COM1, '\r');
+        }
+        while (!user_tx_empty())
+            ;
+        outb(USER_COM1, *str);
+        str++;
+    }
+}
+
+static void serial_write_hex_user(unsigned int num)
+{
+    char hex[11];
+    int i;
+    hex[0] = '0';
+    hex[1] = 'x';
+    for (i = 9; i >= 2; i--) {
+        unsigned char nibble = (unsigned char)(num & 0x0F);
+        hex[i] = nibble < 10 ? '0' + nibble : 'A' + nibble - 10;
+        num >>= 4;
+    }
+    hex[10] = '\0';
+    for (char *p = hex; *p; p++) {
+        while (!user_tx_empty())
+            ;
+        outb(USER_COM1, *p);
+    }
+}
+
+static void serial_write_int_user(unsigned int num)
+{
+    char buf[12];
+    int i = 11;
+    buf[11] = 0;
+    if (num == 0) {
+        while (!user_tx_empty())
+            ;
+        outb(USER_COM1, '0');
+        return;
+    }
+    while (num && i > 0) {
+        i--;
+        buf[i] = '0' + (num % 10);
+        num /= 10;
+    }
+    for (int j = i; buf[j]; j++) {
+        while (!user_tx_empty())
+            ;
+        outb(USER_COM1, buf[j]);
+    }
 }
