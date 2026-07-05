@@ -30,7 +30,8 @@ BIOS
              ├─ kernel/cpu/ap_startup.c → start_aps() → INIT+SIPI → APs boot
               ├─ kernel/task.c → preemptive round-robin task mgr (PID, timer IRQ switch)
               ├─ kernel/scheduler/scheduler.c → init work queue
-             └─ while(1): readline → handle_cmd → dispatch
+              ├─ kernel/elf.c → exec: per-process PD, ring-3 ELF load, preemptive task switch
+              └─ while(1): readline → handle_cmd → dispatch
 ```
 
 **Disk data flow:** ATA PIO LBA28 → raw sector buffer → NVFS superblock parse → bitmap/inode management → extent-based data read/write. Write (shadow paging): save old extents → alloc new blocks → write data → inode_write (persist) → free old blocks → update bitmap.
@@ -162,6 +163,7 @@ Project_002_OS/
   - `barrier()`: `asm volatile("" ::: "memory")` — compiler barrier | []
 - **Lock ordering:** `screen_lock → serial_lock`, `paging_lock → pfa_lock`. No circular dependencies.
 - **`spinlock_try_lock`** used by keyboard ISR to avoid deadlock when user task holds `kb_lock` — drops keystrokes under contention instead of deadlocking.
+- **Ring-3 deadlock constraint:** Locks acquired at CPL=3 (via `spinlock_lock` without `cli`) are unsafe because IF=1 allows timer preemption. The timer ISR's `task_switch_tick` may switch to another task that tries the same lock via `spinlock_lock_irqsave` (CLI + spin) — deadlock. Solution: all `_user` wrappers are lock-free (see screen.c).
 
 ---
 
@@ -413,17 +415,18 @@ Project_002_OS/
 
 ### `kernel/elf.c` + `elf.h`
 
-- **Role:** ELF loader — loads 32-bit ELF executables from NVFS and creates ring-3 user tasks.
-- **Constants:** `ELF_MAGIC=0x464C457F`, `PT_LOAD=1`, `SYSCALL_INT=0x80`, `USER_CS=0x1B`, `USER_DS=0x23`, `USER_STACK_ADDR=0x009FF000`, `USER_ENTRY_MIN=0x00800000`, `USER_ENTRY_MAX=0x00A00000`
+- **Role:** ELF loader — loads 32-bit ELF executables from NVFS and creates ring-3 user tasks with per-process page directories.
+- **Constants:** `ELF_MAGIC=0x464C457F`, `PT_LOAD=1`, `SYSCALL_INT=0x80`, `USER_CS=0x1B`, `USER_DS=0x23`, `USER_STACK_ADDR=0x009FF000`, `USER_ENTRY_MIN=0x00800000`, `USER_ENTRY_MAX=0x00A00000`, `USER_PDE_IDX=2`
 - **Functions:**
-  - `elf_exec(path)`: Read ELF from NVFS → validate magic/headers → enable user paging → allocate pages for segments + stack → load segments into user pages → set up IRET frame (CS=0x1B, SS=0x23, DS/ES/FS/GS=0x23, EFLAGS=0x200) → create task via `alloc_task()` with `kernel_api` struct → switch to user via timer preemption | [nvfs_read, alloc_frame, map_page, paging_enable_user_access, serial_write_string, alloc_task]
-  - `syscall_handler(regs)`: Handle interrupt 0x80 — dispatch SYS_EXIT (cleanup + scheduler switch) | []
-  - `kernel_api` struct: Function pointer table exposing ~30 user-safe entry points (clear_screen, print_string, print_char, print_hex, print_int, draw_pixel, fill_rect, draw_char, draw_string, draw_line, scroll, get_char, read_char, malloc, free, realloc, sleep_ms, get_ticks, fb_cols, fb_rows, nvfs_list, nvfs_read, nvfs_write, nvfs_delete, nvfs_mkdir, nvfs_rmdir, nvfs_chdir, nvfs_cwd, nvfs_errno, nvfs_strerror) — all use `spinlock_lock` wrappers (no `cli`) safe for ring 3.
+  - `elf_exec(path)`: Read ELF from NVFS → validate magic/headers → per-segment bounds checks (p_offset+p_filesz overflow, p_filesz≤p_memsz) → allocate per-process page directory via `page_dir_create()` → clear PDE[2] for fresh page tables → allocate 512 physical frames for 0x800000–0xA00000 and map via `map_page_to_dir()` → switch to task PD → `lib_memcpy` segments → copy `kernel_api` struct → set up user stack with API pointer + exit trampoline → switch back to kernel PD → create task via `alloc_task()` with ring-3 IRET frame (CS=0x1B, SS=0x23, DS/ES/FS/GS=0x23, EFLAGS=0x200, EIP=entry) → add to ready list | [nvfs_read, alloc_frame, page_dir_create, map_page_to_dir, serial_write_string, alloc_task]
+  - `syscall_handler(regs)`: Handle interrupt 0x80 — dispatch SYS_EXIT (cleanup via `free_task_resources` which walks per-process PTEs/PTs/PD, scheduler switch with `page_dir_switch`) | []
+  - `free_task_resources(t)`: Free per-process page tables (skip PDEs matching kernel), their mapped physical pages, the PD frame, and the kernel stack | []
+  - `kernel_api` struct: Function pointer table exposing ~30 user-safe entry points — wrappers use **no locks** (see screen.c rationale). Lock-free serial helpers avoid `cli` at CPL=3.
 - **Import:** `nvfs.h`, `pfa.h`, `paging.h`, `idt.h`, `serial.h`, `task.h`
-- **User-space execution:** ELF segments mapped into 0x00800000–0x00A00000 region. IRET frame sets CS=0x1B (user code, RPL=3), SS=DS=ES=FS=GS=0x23 (user data, RPL=3), EFLAGS=0x200 (IF=1). User task created as preemptive PID via `alloc_task()`.
-- **API calls:** User code invokes kernel functions via direct function-call through a pointer table (`kernel_api` pointer passed in ESI/register). No syscall overhead for most operations — only `SYS_EXIT` uses `int 0x80` because it requires privilege escalation to clean up task state.
+- **User-space execution:** ELF segments mapped into 0x00800000–0x00A00000 region via `map_page_to_dir()`. Separate physical frames per task (not shared with kernel heap). IRET frame sets CS=0x1B (user code, RPL=3), SS=DS=ES=FS=GS=0x23 (user data, RPL=3), EFLAGS=0x200 (IF=1). User task created as preemptive PID via `alloc_task()`.
+- **API calls:** User code invokes kernel functions via direct function-call through a pointer table. No syscall overhead for most operations — only `SYS_EXIT` uses `int 0x80` because it requires privilege escalation to clean up task state.
 - **Segment selectors:** CS=0x1B (GDT index 3 with RPL=3), SS/DS/ES/FS/GS=0x23 (GDT index 4 with RPL=3). These match the GDT entries set up by `gdt_init_percpu()`.
-- **Security:** ELF header validation (magic, phentsize ≥ sizeof(phdr), e_entry bounds 0x00800000–0x00A00000). Per-segment bounds checks with integer overflow guards. All segment loads must stay within the allowed range. Rejects malformed/invalid ELFs with serial-logged errors. Memory isolation via ring 3 segments. `PAGE_USER` set on all accessible pages. `cli`-based instructions GPF at CPL=3 — all API wrappers use non-irqsave spinlocks.
+- **Security:** ELF header validation (magic, phentsize ≥ sizeof(phdr), e_entry bounds 0x00800000–0x00A00000). Per-segment bounds checks with integer overflow guards (`p_offset + p_filesz` overflow, `p_filesz > p_memsz` reject). All segment loads must stay within the allowed range. Rejects malformed/invalid ELFs with serial-logged errors. Memory isolation via per-process page directories + ring 3 segments. `PAGE_USER` set on all accessible pages. No `cli`-based locks at CPL=3 (all API wrappers are lock-free).
 
 ---
 
@@ -551,7 +554,7 @@ Project_002_OS/
   - `set_capture(on)`: Enable/disable capture mode, reset `capture_pos` on enable, null-terminate on disable | []
   - `get_capture(void)`: Null-terminate and return pointer to captured output | []
 - **Import:** `ports.h`, `serial.h`, `graphics.h`, `font.h`
-- **User-safe wrappers:** `clear_screen_user()`, `print_string_user()`, `print_char_user()`, `print_hex_user()`, `print_int_user()`, `set_cursor_user()` — identical behavior but use `spinlock_lock`/`spinlock_unlock` (no `cli`) to avoid GPF at CPL=3.
+- **User-safe wrappers:** `clear_screen_user()`, `print_string_user()`, `print_char_user()`, `print_hex_user()`, `print_int_user()`, `set_cursor_user()` — **no locks, no serial output**. At CPL=3, IF=1 means a timer ISR can preempt while a lock is held. If the ISR's `task_switch_tick` switches to another task that tries the same lock via `spinlock_lock_irqsave` (CLI + spin), the system deadlocks (spinner never yields, lock-holder never runs). Lock-free serial helpers (`serial_write_string_user`, etc.) write directly to COM1 port I/O without synchronization. Per-pixel framebuffer writes and cursor_x/y access tolerate concurrent access (best-effort accuracy).
 
 ---
 
@@ -630,6 +633,7 @@ Project_002_OS/
 - **Import:** `pfa.h`, `paging.h`, `gdt.h`, `timer.h`, `cpu.h`, `scheduler.h`, `serial.h`
 - **Preemptive switching:** Timer ISR calls `task_switch_tick()` every ~10ms (100Hz). If `task_switch_pending` is set (by elf_exec), performs round-robin switch. Saves current kernel_esp, searches for next READY task, switches kernel stack + page directory.
 - **User task switching:** When switching to a user task, `task_switch_tick` returns the kernel_esp of the new task. The interrupt return path (IRET) pops the user-mode frame (CS=0x1B, EIP=user_entry) from the new stack, entering ring 3 transparently.
+- **`page_dir_switch(next->page_dir)` is unconditional** — the old `if (next->page_dir != kernel_page_dir)` guard skipped the CR3 reload when returning to the kernel task, leaving the user PD active and causing heap corruption (kernel heap at 0x800000–0xA00000 mapped to user's physical pages). Always switching ensures the correct page directory is active.
 - **Circular ready list:** Tasks form a singly-linked circular list. `pick_next_locked` starts from current and wraps around. Multiple CPUs can own separate tasks — `cpu_assigned` prevents duplicate scheduling.
 
 ### `kernel/scheduler/scheduler.c` + `kernel/scheduler/scheduler.h`
