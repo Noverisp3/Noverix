@@ -33,8 +33,9 @@ start:
     xor bx, bx
     mov cx, KERNEL_SECTORS
     mov dl, [boot_drive]
+    mov si, KERNEL_LBA
     cmp dl, 0x80
-    jb .chs
+    jb .chs_start
 
     mov word [dap_sectors], 1
     mov dword [dap_lba], KERNEL_LBA
@@ -44,7 +45,12 @@ start:
     mov ah, 0x42
     mov si, dap_start
     int 0x13
-    jc disk_error
+    jnc .lba_ok
+    ; LBA failed — fall back to CHS
+    call query_geometry
+    mov si, KERNEL_LBA          ; current LBA to read
+    jmp .chs
+.lba_ok:
     add bx, 512
     jnc .lba_next
     mov ax, es
@@ -56,13 +62,38 @@ start:
     loop .lba_loop
     jmp .loaded
 
+.chs_start:
+    ; Floppy path: cx = KERNEL_SECTORS, si = KERNEL_LBA
+    call query_geometry
+    mov di, cx
+    jmp .chs_begin
+
 .chs:
-    push cx
-    pop si
-    mov cl, 2
-    xor dh, dh
-    xor ch, ch
+    ; LBA fallback: si = current LBA, cx = remaining sectors, bx, es from LBA loop
+    mov di, cx
+.chs_begin:
 .chs_loop:
+    push es
+    push bx
+    ; Convert si (LBA) to CHS
+    mov ax, si
+    xor dx, dx
+    div word [chs_sec_per_track]   ; ax = LBA/SPT (Q1), dx = LBA%SPT (R1)
+    mov cl, dl
+    inc cl                         ; cl = sector (1-based), 6 bits
+    xor dx, dx
+    div word [chs_heads]           ; ax = cylinder (10 bits), dx = head
+    mov dh, dl                     ; dh = head
+    ; Build CL: low 6 bits = sector, high 2 bits = cylinder bits 9-8
+    push ax
+    mov al, ah
+    and al, 0x03
+    shl al, 6
+    or cl, al
+    pop ax
+    mov ch, al                     ; ch = cylinder low 8 bits
+    pop bx
+    pop es
     mov ax, 0x0201
     int 0x13
     jc disk_error
@@ -72,18 +103,10 @@ start:
     add ax, 0x1000
     mov es, ax
 .chs_next:
-    inc cl
-    cmp cl, 19
-    jb .chs_track
-    mov cl, 1
-    inc dh
-    cmp dh, 2
-    jb .chs_track
-    xor dh, dh
-    inc ch
-.chs_track:
-    dec si
+    inc si
+    dec di
     jnz .chs_loop
+    jmp .loaded
 
 .loaded:
     mov si, msg_kernel_loaded
@@ -187,13 +210,37 @@ disk_error:
 enable_a20:
     pusha
     in al, 0x92
+    cmp al, 0xFF
+    je .no_port
     test al, 2
-    jnz .a20_on
+    jnz .no_port
     or al, 2
     out 0x92, al
+.no_port:
     mov ax, 0x2401
     int 0x15
-.a20_on:
+    popa
+    ret
+
+; Query drive geometry via INT 13h AH=08h.
+; Stores heads and sectors-per-track in chs_heads / chs_sec_per_track.
+query_geometry:
+    pusha
+    mov dl, [boot_drive]
+    mov ah, 0x08
+    int 0x13
+    jc .qd_default
+    and cx, 0x3F                ; CL bits 5-0 = max sector number
+    mov [chs_sec_per_track], cx
+    movzx ax, dh
+    inc ax
+    mov [chs_heads], ax
+    popa
+    ret
+.qd_default:
+    ; Fallback: 1.44 MB floppy geometry (18 spt, 2 heads)
+    mov word [chs_sec_per_track], 18
+    mov word [chs_heads], 2
     popa
     ret
 
@@ -226,6 +273,8 @@ switch_to_pm:
     jmp CODE_SEG:PM_TRAMPOLINE_ADDR
 
 boot_drive      db 0
+chs_sec_per_track dw 18
+chs_heads       dw 2
 dap_start:
 dap_size:       db 0x10
 dap_reserved:   db 0
@@ -236,3 +285,8 @@ dap_lba:        dd 0, 0
 msg_stage2      db "Noverix Stage 2", 0x0D, 0x0A, 0
 msg_kernel_loaded db "Kernel loaded", 0x0D, 0x0A, 0
 msg_disk_error  db "Disk!", 0
+
+; Stage 2 must fit below kernel load address (0x9000 - 0x7E00 = 0x1200)
+%if ($ - $$) > 0x1200
+%error "Stage 2 bootloader exceeds 0x1200 bytes — overlaps kernel load area"
+%endif

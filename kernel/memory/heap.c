@@ -215,6 +215,8 @@ void free_impl(void *ptr)
 
 void *calloc_impl(unsigned int num, unsigned int size)
 {
+    if (num == 0 || size == 0) return 0;
+    if (num > 0xFFFFFFFFU / size) return 0;
     unsigned int total = num * size;
     void *ptr = malloc_impl(total);
     if (ptr)

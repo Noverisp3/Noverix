@@ -94,8 +94,6 @@ int map_page_to_dir(page_dir_t dir, unsigned int virt, unsigned int phys, unsign
     page_table_entry_t *table = (page_table_entry_t *)(dir[pde_idx] & 0xFFFFF000);
     unsigned int pte_idx = PTE_IDX(virt);
     table[pte_idx] = (phys & 0xFFFFF000) | PAGE_PRESENT | (flags & (PAGE_WRITE | PAGE_USER | PAGE_PRESENT));
-
-    __asm__ volatile ("invlpg (%0)" : : "r" (virt) : "memory");
     return 0;
 }
 
@@ -104,6 +102,8 @@ int map_page(unsigned int virt, unsigned int phys, unsigned int flags)
     unsigned int flags_save = spinlock_lock_irqsave(&paging_lock);
     int r = map_page_to_dir(kernel_page_dir, virt, phys, flags);
     spinlock_unlock_irqrestore(&paging_lock, flags_save);
+    if (r == 0)
+        __asm__ volatile ("invlpg (%0)" : : "r" (virt) : "memory");
     return r;
 }
 
@@ -119,7 +119,6 @@ int unmap_page_from_dir(page_dir_t dir, unsigned int virt)
         return -1;
 
     table[pte_idx] = 0;
-    tlb_shootdown(virt);
     return 0;
 }
 
@@ -128,6 +127,8 @@ int unmap_page(unsigned int virt)
     unsigned int flags_save = spinlock_lock_irqsave(&paging_lock);
     int r = unmap_page_from_dir(kernel_page_dir, virt);
     spinlock_unlock_irqrestore(&paging_lock, flags_save);
+    if (r == 0)
+        tlb_shootdown(virt);
     return r;
 }
 

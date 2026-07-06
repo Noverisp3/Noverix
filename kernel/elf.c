@@ -60,7 +60,7 @@ unsigned int syscall_handler(registers_t *regs)
         task_t *curr = cpu_info[cpu].current_task;
         if (!curr) return 0;
 
-        spinlock_lock(&sched_lock);
+        unsigned int _flags2 = spinlock_lock_irqsave(&sched_lock);
         free_task_resources(curr);
         curr->state = TASK_FREE;
         curr->cpu_assigned = -1;
@@ -79,7 +79,7 @@ unsigned int syscall_handler(registers_t *regs)
         }
 
         cpu_info[cpu].current_task = 0;
-        spinlock_unlock(&sched_lock);
+        spinlock_unlock_irqrestore(&sched_lock, _flags2);
         page_dir_switch(kernel_page_dir);
         return 0;
 
@@ -87,7 +87,7 @@ unsigned int syscall_handler(registers_t *regs)
         next->state = TASK_RUNNING;
         next->cpu_assigned = cpu;
         cpu_info[cpu].current_task = next;
-        spinlock_unlock(&sched_lock);
+        spinlock_unlock_irqrestore(&sched_lock, _flags2);
 
         gdt_set_kernel_stack(cpu, (unsigned int)next->kernel_stack_base + TASK_STACK_SIZE);
         page_dir_switch(next->page_dir);
@@ -300,6 +300,11 @@ int elf_exec(const char *path)
     serial_write_int(ehdr->e_phnum);
     serial_write_string("\n");
 
+    if (ehdr->e_phnum > 0xFFFF || ehdr->e_phentsize > 0xFFFF ||
+        (unsigned int)ehdr->e_phnum * (unsigned int)ehdr->e_phentsize > 0xFFFFFFFFU - ehdr->e_phoff) {
+        print_string("Error: Program header table overflow\n");
+        return -1;
+    }
     if (ehdr->e_phoff + ehdr->e_phnum * ehdr->e_phentsize > (unsigned int)size) {
         print_string("Error: Program Header Table out of file bounds\n");
         return -1;
@@ -350,14 +355,14 @@ int elf_exec(const char *path)
         unsigned int phys = (unsigned int)alloc_frame();
         if (!phys) {
             print_string("Error: Out of memory for user pages\n");
-            free_frame((void *)pd);
             pd[USER_PDE_IDX] = 0;
+            free_frame((void *)pd);
             return -1;
         }
         if (map_page_to_dir(pd, addr, phys, PAGE_WRITE | PAGE_USER) != 0) {
             print_string("Error: Failed to map user page\n");
-            free_frame((void *)pd);
             pd[USER_PDE_IDX] = 0;
+            free_frame((void *)pd);
             return -1;
         }
     }
@@ -419,6 +424,12 @@ int elf_exec(const char *path)
 
     page_dir_switch(kernel_page_dir);
 
+    /* Remove kernel identity-mapped PDEs so user code can't access
+     * physical memory below 8 MB through stack underflow or direct
+     * address manipulation.  All kernel API calls go through int 0x80. */
+    pd[0] = 0;
+    pd[1] = 0;
+
     task_t *t = alloc_task();
     if (!t) {
         print_string("Error: Failed to allocate task\n");
@@ -464,7 +475,7 @@ int elf_exec(const char *path)
     t->page_dir = pd;
     t->state = TASK_READY;
 
-    spinlock_lock(&sched_lock);
+    unsigned int _flags = spinlock_lock_irqsave(&sched_lock);
     if (!ready_head) {
         ready_head = t;
         t->next = t;
@@ -472,7 +483,7 @@ int elf_exec(const char *path)
         t->next = ready_head->next;
         ready_head->next = t;
     }
-    spinlock_unlock(&sched_lock);
+    spinlock_unlock_irqrestore(&sched_lock, _flags);
 
     serial_write_string("[elf] User task created. Entry=");
     serial_write_hex(ehdr->e_entry);

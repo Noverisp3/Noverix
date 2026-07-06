@@ -58,7 +58,7 @@ task_t *task_create(void (*entry)(void))
     t->state = TASK_READY;
 
     /* Add to circular ready list (locked) */
-    spinlock_lock(&sched_lock);
+    unsigned int _flags = spinlock_lock_irqsave(&sched_lock);
     if (!ready_head) {
         ready_head = t;
         t->next = t;
@@ -66,7 +66,7 @@ task_t *task_create(void (*entry)(void))
         t->next = ready_head->next;
         ready_head->next = t;
     }
-    spinlock_unlock(&sched_lock);
+    spinlock_unlock_irqrestore(&sched_lock, _flags);
 
     return t;
 }
@@ -117,7 +117,7 @@ static unsigned int task_switch_from(unsigned int current_esp,
     curr->kernel_esp = current_esp;
     curr->wakeup_tick = wakeup_tick;
 
-    spinlock_lock(&sched_lock);
+    unsigned int flags = spinlock_lock_irqsave(&sched_lock);
 
     if (new_state == TASK_READY) {
         curr->state = TASK_READY;
@@ -133,21 +133,21 @@ static unsigned int task_switch_from(unsigned int current_esp,
         /* No runnable task — re-assign current */
         curr->state = TASK_RUNNING;
         curr->cpu_assigned = cpu;
-        spinlock_unlock(&sched_lock);
+        spinlock_unlock_irqrestore(&sched_lock, flags);
         return 0;
     }
 
     if (next == curr) {
         curr->state = TASK_RUNNING;
         curr->cpu_assigned = cpu;
-        spinlock_unlock(&sched_lock);
+        spinlock_unlock_irqrestore(&sched_lock, flags);
         return 0;
     }
 
     next->state = TASK_RUNNING;
     next->cpu_assigned = cpu;
     cpu_info[cpu].current_task = next;
-    spinlock_unlock(&sched_lock);
+    spinlock_unlock_irqrestore(&sched_lock, flags);
 
     gdt_set_kernel_stack(cpu, (unsigned int)next->kernel_stack_base + TASK_STACK_SIZE);
     page_dir_switch(next->page_dir);

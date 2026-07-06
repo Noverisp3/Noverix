@@ -188,6 +188,15 @@ int rtl8139_send(const void *data, uint16_t len)
     /* Use round-robin descriptor to match QEMU's currTxDesc progression */
     int idx = tx_next_idx;
 
+    /* Wait for NIC to release ownership of this descriptor before reusing it.
+     * TX_HOST_OWNS (bit 13) set = host owns it (NIC is done). */
+    {
+        volatile int timeout = 5000000;
+        while (timeout-- && !(inl(io_base + RT_TX_STATUS + idx * 4) & TX_HOST_OWNS))
+            ;
+        if (timeout < 0) return -1;
+    }
+
     tx_in_use[idx] = 1;
 
     /* Copy packet data to TX buffer */
@@ -256,9 +265,16 @@ int rtl8139_recv(uint8_t *buf, uint16_t *len)
               rx_dbg++;
           } }
 
+        /* Validate packet length to avoid integer underflow */
+        if (pkt_len < 4 || pkt_len > 0x2000) {
+            rx_offset = (rx_offset + 4 + 4 + 3) & ~3;
+            rx_offset &= RX_BUF_SIZE - 1;
+            goto update_capr;
+        }
+
         if (!(status & RX_STAT_OK)) {
             rx_offset = (rx_offset + 4 + pkt_len + 3) & ~3;
-            if (rx_offset >= RX_BUF_SIZE) rx_offset -= RX_BUF_SIZE;
+            rx_offset &= RX_BUF_SIZE - 1;
             goto update_capr;
         }
 
@@ -266,7 +282,7 @@ int rtl8139_recv(uint8_t *buf, uint16_t *len)
         if (data_len > 1514) data_len = 1514;
 
         /* Copy from data offset (after 4-byte header) */
-        int data_off = rx_offset + 4;
+        unsigned data_off = (rx_offset + 4) & (RX_BUF_SIZE - 1);
         if (data_off + data_len <= RX_BUF_SIZE) {
             lib_memcpy(buf, rx_buf + data_off, data_len);
             *len = data_len;
@@ -279,16 +295,17 @@ int rtl8139_recv(uint8_t *buf, uint16_t *len)
 
         /* Advance past header + full pkt_len (incl CRC), align to 4 */
         rx_offset = (rx_offset + 4 + pkt_len + 3) & ~3;
-        if (rx_offset >= RX_BUF_SIZE) rx_offset -= RX_BUF_SIZE;
+        rx_offset &= RX_BUF_SIZE - 1;
 
 update_capr: ;
         /* QEMU internally does: RxBufPtr = CAPR + 0x10.
-         * Compensate so NIC's read pointer matches our rx_offset. */
-        outw(io_base + RT_CAPR, rx_offset >= 16 ? rx_offset - 16 : 0);
+         * Compensate with proper modular arithmetic so NIC's read
+         * pointer matches our rx_offset even on wrap-around. */
+        outw(io_base + RT_CAPR, (uint16_t)((rx_offset - 16) & (RX_BUF_SIZE - 1)));
         outw(io_base + RT_ISR, 0x0005);
         cbr = inw(io_base + RT_CBR);
 
-        return 0;
+        break;
     }
 
     return -1;  /* no packet */

@@ -198,7 +198,9 @@ static void send_icmp_echo(uint32_t dst_ip, uint16_t id, uint16_t seq)
 static void handle_icmp(uint8_t *pkt, uint16_t len)
 {
     (void)len;
-    icmp_hdr_t *icmp = (icmp_hdr_t *)(pkt + 34);
+    unsigned ip_hlen = (pkt[14] & 0x0F) * 4;
+    if (ip_hlen < 20) return;
+    icmp_hdr_t *icmp = (icmp_hdr_t *)(pkt + 14 + ip_hlen);
 
     if (icmp->type == ICMP_ECHO_REP) {
         uint16_t id  = net_ntohs(icmp->id);
@@ -236,7 +238,9 @@ static int net_parse_packet(uint8_t *pkt, uint16_t len)
     case ETH_IP:
         if (len >= 34) {
             ip_hdr_t *ip = (ip_hdr_t *)(pkt + 14);
-            if (ip->protocol == IP_ICMP && len >= 42)
+            unsigned ip_hlen = (ip->ver_ihl & 0x0F) * 4;
+            if (ip_hlen >= 20 && len >= 14 + ip_hlen + 8 &&
+                ip->protocol == IP_ICMP)
                 handle_icmp(pkt, len);
         }
         return 0;
@@ -293,9 +297,11 @@ int net_ping(uint32_t dst_ip, int timeout_ms, int *rtt_ms)
         }
     }
 
-    /* Update ARP cache MAC for ICMP send */
+    /* Update ARP cache with the resolved target IP, not dst_ip.
+     * For off-subnet pings, arp_target is the gateway; storing
+     * dst_ip → gateway_mac would poison future lookups. */
     lib_memcpy(arp_cache_mac, gw_mac, 6);
-    arp_cache_ip = dst_ip;
+    arp_cache_ip = arp_target;
     arp_cache_valid = 1;
 
     /* Reset reply flag */
