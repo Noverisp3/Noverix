@@ -4,6 +4,7 @@
 #include "../drivers/serial.h"
 #include "../cpu/timer.h"
 #include "../sync/sync.h"
+#include "../memory/heap.h"
 
 int nvfs_errno;
 static spinlock_t nvfs_lock;
@@ -102,6 +103,8 @@ static int inode_read(unsigned inum, struct nvfs_inode *inode)
     inode->ctime[1] = *(p + 6);
     inode->ctime[2] = *(p + 7);
     inode->extent_count = *(unsigned int *)(p + 8);
+    if (inode->extent_count > NVFS_MAX_EXTENTS)
+        inode->extent_count = NVFS_MAX_EXTENTS;
     for (unsigned i = 0; i < NVFS_MAX_EXTENTS; i++) {
         inode->extents[i].start = *(unsigned int *)(p + 12 + i * 8);
         inode->extents[i].count = *(unsigned int *)(p + 12 + i * 8 + 4);
@@ -447,15 +450,19 @@ static int dir_add_extent(struct nvfs_inode *inode, unsigned block)
     if (indirect_count > 0) {
         if (indirect_read_extents(ind_lba, ibuf, NVFS_INDIRECT_ENTS) < 0) {
             nvfs_errno = NVFS_ERR_IO;
-            if (need_alloc) bitmap_set(ind_lba, 0);
+error_free_indirect:
+            if (need_alloc) {
+                bitmap_set(ind_lba, 0);
+                inode->extents[NVFS_DIRECT_EXTENTS].start = 0;
+                inode->extents[NVFS_DIRECT_EXTENTS].count = 0;
+            }
             return -1;
         }
     }
 
     if (indirect_count >= NVFS_INDIRECT_ENTS) {
         nvfs_errno = NVFS_ERR_NO_SPACE;
-        if (need_alloc) bitmap_set(ind_lba, 0);
-        return -1;
+        goto error_free_indirect;
     }
 
     ibuf[indirect_count].start = block;
@@ -464,8 +471,7 @@ static int dir_add_extent(struct nvfs_inode *inode, unsigned block)
 
     if (indirect_write_extents(ind_lba, ibuf, indirect_count) != 0) {
         nvfs_errno = NVFS_ERR_IO;
-        if (need_alloc) bitmap_set(ind_lba, 0);
-        return -1;
+        goto error_free_indirect;
     }
 
     inode->extent_count = NVFS_DIRECT_EXTENTS + indirect_count;
@@ -478,6 +484,9 @@ static int dir_add(unsigned dir_inode, const char *name, unsigned child_inode)
     struct nvfs_inode inode;
     if (inode_read(dir_inode, &inode) != 0) { nvfs_errno = NVFS_ERR_IO; return -1; }
     if (inode.type != NVFS_TYPE_DIR) { nvfs_errno = NVFS_ERR_NOT_DIR; return -1; }
+
+    /* Reject duplicate names */
+    if (dir_find(dir_inode, name) >= 0) { nvfs_errno = NVFS_ERR_EXISTS; return -1; }
 
     unsigned char tmp[NVFS_SECTOR_SIZE];
     int name_len = 0;
@@ -745,6 +754,17 @@ int nvfs_mount(void)
                     sb_inode_blocks = *(unsigned int *)(buf + 36);
                     if (sb_inode_blocks == 0)
                         sb_inode_blocks = sb_inode_count / (NVFS_SECTOR_SIZE / NVFS_INODE_SIZE);
+                    /* Validate superblock layout */
+                    unsigned sb_bitmap_end = sb_bitmap_start + sb_bitmap_sectors;
+                    unsigned sb_inode_end = sb_inode_start + sb_inode_blocks;
+                    if (sb_bitmap_start < 2 ||
+                        sb_bitmap_sectors == 0 ||
+                        sb_inode_blocks == 0 ||
+                        sb_inode_count == 0 ||
+                        sb_bitmap_end > sb_inode_start ||
+                        sb_inode_end > sb_data_start) {
+                        continue;
+                    }
                     nvfs_cwd = NVFS_ROOT_INODE;
                     mounted = 1;
                     spinlock_unlock(&nvfs_lock);
@@ -1149,12 +1169,13 @@ int nvfs_append(const char *path, const void *data, unsigned size)
     if (inode_read(inum, &inode) != 0) { nvfs_errno = NVFS_ERR_IO; goto fail; }
     if (inode.type != NVFS_TYPE_FILE) { nvfs_errno = NVFS_ERR_NOT_FILE; goto fail; }
 
-    char tmp[4096];
+    char *tmp = (char *)malloc(4096);
+    if (!tmp) { nvfs_errno = NVFS_ERR_IO; goto fail; }
     unsigned old = inode.size > 4096 ? 4096 : inode.size;
     unsigned remain = 4096 - old;
     unsigned add = size > remain ? remain : size;
 
-    if (extent_read(&inode, (unsigned char *)tmp, old) < 0) { nvfs_errno = NVFS_ERR_IO; goto fail; }
+    if (extent_read(&inode, (unsigned char *)tmp, old) < 0) { free(tmp); nvfs_errno = NVFS_ERR_IO; goto fail; }
     const unsigned char *src = (const unsigned char *)data;
     for (unsigned i = 0; i < add; i++) tmp[old + i] = src[i];
 
@@ -1162,16 +1183,16 @@ int nvfs_append(const char *path, const void *data, unsigned size)
     unsigned old_count = inode.extent_count;
     struct nvfs_extent old_cache[EXTENT_CACHE_MAX];
     int old_total = extent_load_all(&inode, old_cache, EXTENT_CACHE_MAX);
-    if (old_total < 0) { nvfs_errno = NVFS_ERR_IO; goto fail; }
+    if (old_total < 0) { free(tmp); nvfs_errno = NVFS_ERR_IO; goto fail; }
     unsigned old_ind_blk = 0;
     if (old_count > NVFS_DIRECT_EXTENTS)
         old_ind_blk = inode.extents[NVFS_DIRECT_EXTENTS].start;
 
     if (extent_write(&inode, (const unsigned char *)tmp, old + add) != 0) {
-        nvfs_errno = NVFS_ERR_NO_SPACE; goto fail;
+        free(tmp); nvfs_errno = NVFS_ERR_NO_SPACE; goto fail;
     }
     inode.mtime = now_sec();
-    if (inode_write(inum, &inode) != 0) { nvfs_errno = NVFS_ERR_IO; goto fail; }
+    if (inode_write(inum, &inode) != 0) { free(tmp); nvfs_errno = NVFS_ERR_IO; goto fail; }
 
     /* Safe to free old blocks now */
     for (int i = 0; i < old_total; i++)
@@ -1179,6 +1200,7 @@ int nvfs_append(const char *path, const void *data, unsigned size)
             bitmap_set(old_cache[i].start + j, 0);
     if (old_ind_blk)
         bitmap_set(old_ind_blk, 0);
+    free(tmp);
     spinlock_unlock(&nvfs_lock);
     return 0;
 fail:

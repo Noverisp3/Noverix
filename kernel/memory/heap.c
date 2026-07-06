@@ -60,9 +60,8 @@ static void *malloc_impl(unsigned int size)
 
         if (block_size == 0 || block_size > HEAP_SIZE)
         {
-            serial_write_string("[heap] malloc: CORRUPTED block size found! Resetting heap...\n");
-            heap_init();
-            return 0;
+            serial_write_string("[heap] malloc: CORRUPTED block size found! Halting.\n");
+            __asm__ volatile ("cli; hlt");
         }
 
         if (is_free && block_size >= need)

@@ -75,6 +75,7 @@ void *alloc_frame(void)
 
 void free_frame(void *addr)
 {
+    if (!addr) return;
     unsigned int flags = spinlock_lock_irqsave(&pfa_lock);
     unsigned int frame = FRAME(addr);
     if (frame < total_frames) clear_bit(frame);

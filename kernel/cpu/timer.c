@@ -79,6 +79,10 @@ unsigned int get_ticks(void)
 void sleep_ms(unsigned int ms)
 {
     unsigned int start = tick_count;
-    unsigned int ticks_to_wait = (ms + tick_ms - 1) / tick_ms;
+    unsigned int ticks_to_wait;
+    if (ms > 0xFFFFFFFFU - (tick_ms - 1))
+        ticks_to_wait = 0xFFFFFFFFU;
+    else
+        ticks_to_wait = (ms + tick_ms - 1) / tick_ms;
     while ((tick_count - start) < ticks_to_wait);
 }

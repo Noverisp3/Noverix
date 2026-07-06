@@ -3,6 +3,7 @@
 #include "../drivers/screen.h"
 #include "../drivers/serial.h"
 #include "../apic/lapic.h"
+#include "../sync/sync.h"
 
 typedef struct {
     unsigned short base_low;
@@ -326,17 +327,13 @@ static void irq_remap(void)
     outb(0xA1, 0x00);   /* slave: unmask all IRQs (8-15) */
 }
 
+static spinlock_t idt_lock = SPINLOCK_INIT;
+
 void register_interrupt_handler(int irq, interrupt_handler_t handler)
 {
-    __asm__ volatile (
-        "pushf\n\t"
-        "cli\n\t"
-        "movl %1, %0\n\t"
-        "popf\n\t"
-        : "=m" (interrupt_handlers[irq])
-        : "r" (handler)
-        : "memory"
-    );
+    unsigned int f = spinlock_lock_irqsave(&idt_lock);
+    interrupt_handlers[irq] = handler;
+    spinlock_unlock_irqrestore(&idt_lock, f);
 }
 
 void init_idt(void)

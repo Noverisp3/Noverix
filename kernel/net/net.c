@@ -106,23 +106,27 @@ static void handle_arp(uint8_t *pkt, uint16_t len)
 
     uint32_t spa = arp->spa;
     uint8_t *sha = arp->sha;
+    uint16_t oper = net_ntohs(arp->oper);
 
-    /* Cache the sender */
-    arp_cache_ip = net_ntohl(spa);
-    lib_memcpy(arp_cache_mac, sha, 6);
-    arp_cache_valid = 1;
+    /* Only cache ARP replies to avoid cache poisoning from unsolicited requests.
+     * A reply (oper=2) targeted at our IP address is a legitimate response. */
+    if (oper == 2 && arp->tpa == net_htonl(NET_HOST_IP)) {
+        arp_cache_ip = net_ntohl(spa);
+        lib_memcpy(arp_cache_mac, sha, 6);
+        arp_cache_valid = 1;
 
-    serial_write_string("[net] ARP: cached ");
-    serial_write_hex(spa);
-    serial_write_string(" -> ");
-    for (int i = 0; i < 6; i++) {
-        serial_write_hex(sha[i]);
-        if (i < 5) serial_write_char(':');
+        serial_write_string("[net] ARP: cached ");
+        serial_write_hex(spa);
+        serial_write_string(" -> ");
+        for (int i = 0; i < 6; i++) {
+            serial_write_hex(sha[i]);
+            if (i < 5) serial_write_char(':');
+        }
+        serial_write_char('\n');
     }
-    serial_write_char('\n');
 
     /* If this is a request for us, send reply */
-    if (net_ntohs(arp->oper) == 1) {  /* Request */
+    if (oper == 1) {  /* Request */
         uint32_t target_ip = net_htonl(NET_HOST_IP);
         if (arp->tpa == target_ip) {
             uint8_t reply[42];
@@ -195,12 +199,24 @@ static void send_icmp_echo(uint32_t dst_ip, uint16_t id, uint16_t seq)
     serial_write_string("[net] ICMP echo request sent\n");
 }
 
+static int check_icmp_checksum(icmp_hdr_t *icmp, unsigned total_len)
+{
+    uint16_t saved = icmp->checksum;
+    icmp->checksum = 0;
+    uint16_t calc = net_checksum(icmp, total_len);
+    icmp->checksum = saved;
+    return saved == calc;
+}
+
 static void handle_icmp(uint8_t *pkt, uint16_t len)
 {
     (void)len;
     unsigned ip_hlen = (pkt[14] & 0x0F) * 4;
     if (ip_hlen < 20) return;
     icmp_hdr_t *icmp = (icmp_hdr_t *)(pkt + 14 + ip_hlen);
+    unsigned icmp_len = len - 14 - ip_hlen;
+    if (icmp_len < 8) return;
+    if (!check_icmp_checksum(icmp, icmp_len)) return;
 
     if (icmp->type == ICMP_ECHO_REP) {
         uint16_t id  = net_ntohs(icmp->id);
@@ -239,8 +255,16 @@ static int net_parse_packet(uint8_t *pkt, uint16_t len)
         if (len >= 34) {
             ip_hdr_t *ip = (ip_hdr_t *)(pkt + 14);
             unsigned ip_hlen = (ip->ver_ihl & 0x0F) * 4;
-            if (ip_hlen >= 20 && len >= 14 + ip_hlen + 8 &&
-                ip->protocol == IP_ICMP)
+            /* Validate: IPv4, valid header length, total length matches,
+             * no fragments, valid checksum */
+            if ((ip->ver_ihl >> 4) != 4) return 0;
+            if (ip_hlen < 20) return 0;
+            if (len < 14 + ip_hlen) return 0;
+            uint16_t ip_total = net_ntohs(ip->total_len);
+            if (ip_total < ip_hlen || len < 14 + ip_total) return 0;
+            if ((ip->flags_frag & 0x3F) != 0) return 0;  /* no fragments */
+            if (net_checksum(ip, ip_hlen) != 0) return 0;
+            if (ip->protocol == IP_ICMP && len >= 14 + ip_hlen + 8)
                 handle_icmp(pkt, len);
         }
         return 0;
@@ -273,6 +297,9 @@ int net_arp_resolve(uint32_t ip, uint8_t mac[6])
             lib_memcpy(mac, arp_cache_mac, 6);
             return 0;
         }
+
+        /* Brief delay to let scheduler run other tasks */
+        for (volatile int d = 0; d < 10000; d++);
     }
 
     return -1;  /* Timeout */

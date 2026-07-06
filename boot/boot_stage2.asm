@@ -138,6 +138,9 @@ start:
     jmp .vbe_done
 .vbe_fail:
     mov dword [0x1000], 0
+    mov dword [0x1004], 0
+    mov dword [0x1008], 0
+    mov byte  [0x100A], 0
 .vbe_done:
 
     mov ax, 0xE801

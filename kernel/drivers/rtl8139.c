@@ -202,7 +202,10 @@ int rtl8139_send(const void *data, uint16_t len)
     /* Copy packet data to TX buffer */
     lib_memcpy(tx_buf_virt[idx], data, len);
 
-    /* Pad to minimum 60 bytes */
+    /* Pad to minimum 60 bytes and zero the padding */
+    if (len < 60) {
+        lib_memset(tx_buf_virt[idx] + len, 0, 60 - len);
+    }
     uint16_t tx_len = len < 60 ? 60 : len;
 
     /* Trigger TX: write length (lower bits) — TxHostOwns (bit 13) cleared = NIC owns */
@@ -305,8 +308,10 @@ update_capr: ;
         outw(io_base + RT_ISR, 0x0005);
         cbr = inw(io_base + RT_CBR);
 
-        break;
+        /* If we copied a valid packet, return success.
+         * Loop continues only for error/invalid entries. */
+        if (*len > 0) return 0;
     }
 
-    return -1;  /* no packet */
+    return -1;
 }
