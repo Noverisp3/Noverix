@@ -16,11 +16,13 @@ typedef struct {
 static task_entry_t tasks[MAX_TASKS];
 static spinlock_t sched_lock = SPINLOCK_INIT;
 static volatile int next_id = 1;
+static volatile int next_task_cpu;
 
 void scheduler_init(void)
 {
     lib_memset((void *)tasks, 0, sizeof(tasks));
     next_id = 1;
+    next_task_cpu = 0;
     serial_write_string("[sched] init\n");
 }
 
@@ -32,7 +34,9 @@ int scheduler_submit(task_fn fn, void *arg)
             tasks[i].fn = fn;
             tasks[i].arg = arg;
             tasks[i].state = 1;
-            tasks[i].cpu_id = -1;
+            tasks[i].cpu_id = next_task_cpu;
+            if (cpu_count > 1)
+                next_task_cpu = (next_task_cpu + 1) % cpu_count;
             int id = next_id++;
             spinlock_unlock_irqrestore(&sched_lock, flags);
             return id;
@@ -56,8 +60,8 @@ void scheduler_wait_all(void)
         spinlock_unlock_irqrestore(&sched_lock, flags);
         if (!pending) break;
 
-        /* Help process tasks ourselves instead of just waiting */
-        scheduler_step();
+        if (!scheduler_step())
+            __asm__ volatile ("pause");
     }
 }
 
@@ -76,8 +80,9 @@ int scheduler_pending(void)
 int scheduler_step(void)
 {
     unsigned int flags = spinlock_lock_irqsave(&sched_lock);
+    int cpu = get_cpu_id();
     for (int i = 0; i < MAX_TASKS; i++) {
-        if (tasks[i].state == 1) {
+        if (tasks[i].state == 1 && tasks[i].cpu_id == cpu) {
             task_fn fn = tasks[i].fn;
             void *arg = tasks[i].arg;
             tasks[i].state = 2;
