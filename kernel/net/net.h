@@ -9,6 +9,7 @@
 
 /* IP protocols */
 #define IP_ICMP  1
+#define IP_TCP   6
 
 /* ICMP types */
 #define ICMP_ECHO_REQ 8
@@ -61,6 +62,9 @@ typedef struct {
 } icmp_hdr_t;
 
 #pragma pack(pop)
+
+/* Own MAC address — filled by net_init, used by TCP */
+extern uint8_t own_mac[6];
 
 /* Byte-order helpers */
 static inline uint16_t net_htons(uint16_t x)

@@ -25,6 +25,7 @@
 #include "task.h"
 
 #include "net/net.h"
+#include "net/tcp.h"
 
 #define VBE_INFO_ADDR ((volatile unsigned int *)0x1000)
 
@@ -247,6 +248,7 @@ static void execute_cmd(const char *cmd, char *arg)
         print_string("ps       List running tasks\n");
         print_string("kill     Kill a task by PID: kill <pid>\n");
         print_string("ping     Ping an IP address: ping <ip>\n");
+        print_string("tcp      TCP test: tcp <ip> <port> [data]\n");
     } else if (lib_strcmp(cmd, "echo") == 0) {
         int is_append = 0;
         char *redir = arg;
@@ -549,6 +551,75 @@ static void execute_cmd(const char *cmd, char *arg)
                 print_string("Reply: time="); print_int(rtt); print_string("ms\n");
             } else {
                 print_string("Request timed out.\n");
+            }
+        }
+    } else if (lib_strcmp(cmd, "tcp") == 0) {
+        char ip_str[32], port_str[16], msg[128];
+        char *p = arg;
+        while (*p == ' ') p++;
+        int j = 0;
+        while (*p && *p != ' ') ip_str[j++] = *p++;
+        ip_str[j] = 0;
+        while (*p == ' ') p++;
+        j = 0;
+        while (*p && *p != ' ') port_str[j++] = *p++;
+        port_str[j] = 0;
+        while (*p == ' ') p++;
+        j = 0;
+        while (*p && j < (int)sizeof(msg) - 1) msg[j++] = *p++;
+        msg[j] = 0;
+
+        if (!ip_str[0] || !port_str[0]) {
+            print_string("Usage: tcp <ip> <port> [data]\n");
+        } else {
+            uint32_t ip = net_ip_aton(ip_str);
+            int port = 0;
+            for (int i = 0; port_str[i]; i++)
+                port = port * 10 + (port_str[i] - '0');
+            print_string("Connecting to ");
+            print_string(ip_str); print_string(":"); print_string(port_str);
+            print_string("...\n");
+
+            int sock = tcp_connect(ip, (uint16_t)port, 5000);
+            if (sock < 0) {
+                print_string("Connection failed.\n");
+            } else {
+                print_string("Connected (sock=");
+                print_int(sock);
+                print_string(")\n");
+
+                if (msg[0]) {
+                    print_string("Sending: ");
+                    print_string(msg);
+                    print_string("\n");
+                    if (tcp_send(sock, msg, lib_strlen(msg), 3000) < 0) {
+                        print_string("Send timeout.\n");
+                    } else {
+                        print_string("Sent.\n");
+                    }
+                }
+
+                print_string("Waiting for response...\n");
+                uint8_t recv_buf[1460];
+                int n = tcp_recv(sock, recv_buf, sizeof(recv_buf), 3000);
+                if (n > 0) {
+                    recv_buf[n] = 0;
+                    print_string("Received ");
+                    print_int(n);
+                    print_string(" bytes: ");
+                    print_string((char *)recv_buf);
+                    print_string("\n");
+                    for (int i = 0; i < n && i < 64; i++) {
+                        print_hex(recv_buf[i]);
+                        print_string(" ");
+                    }
+                    print_string("\n");
+                } else {
+                    print_string("No response.\n");
+                }
+
+                tcp_close(sock);
+                print_string("Connection closed.\n");
             }
         }
     } else if (cmd[0]) {
@@ -932,6 +1003,7 @@ void kernel_main(void)
 
     /* Initialize networking */
     net_init();
+    tcp_init();
 
     int cpu = get_cpu_id();
 

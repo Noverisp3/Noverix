@@ -42,7 +42,8 @@ KERNEL_OBJS = \
 	$(BUILD_DIR)/task.o \
 	$(BUILD_DIR)/pci.o \
 	$(BUILD_DIR)/rtl8139.o \
-	$(BUILD_DIR)/net.o
+	$(BUILD_DIR)/net.o \
+	$(BUILD_DIR)/tcp.o
 
 .PHONY: all clean run run-qemu iso
 
@@ -131,3 +132,5 @@ run: $(BUILD_DIR)/os-image.bin
 	bochs -q -f bochsrc.bxrc
 
 iso: $(BUILD_DIR)/os-image.iso
+
+

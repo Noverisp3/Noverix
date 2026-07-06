@@ -1,4 +1,5 @@
 #include "net.h"
+#include "tcp.h"
 #include "../drivers/rtl8139.h"
 #include "../lib.h"
 #include "../drivers/serial.h"
@@ -7,8 +8,8 @@
 /* Forward declaration for self-use */
 static int net_parse_packet(uint8_t *pkt, uint16_t len);
 
-/* Own MAC address */
-static uint8_t own_mac[6];
+/* Own MAC address — non-static so tcp.c can use it */
+uint8_t own_mac[6];
 
 /* ARP cache: single entry */
 static uint32_t arp_cache_ip;
@@ -266,6 +267,8 @@ static int net_parse_packet(uint8_t *pkt, uint16_t len)
             if (net_checksum(ip, ip_hlen) != 0) return 0;
             if (ip->protocol == IP_ICMP && len >= 14 + ip_hlen + 8)
                 handle_icmp(pkt, len);
+            if (ip->protocol == IP_TCP && len >= 14 + ip_hlen + 20)
+                tcp_handle_packet(pkt, len);
         }
         return 0;
     default:
